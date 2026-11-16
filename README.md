@@ -579,20 +579,10 @@ python tests/run_test.py
 
 ## 致谢
 
-- 插件骨架与配置写法参考 [astrbot_plugin_model_insight](https://github.com/fuxil/astrbot_plugin_model_insight)。
 - 情绪系统对接以 [astrbot_plugin_self_learning](https://github.com/NickCharlie/astrbot_plugin_self_learning) 的实际实现为准（AGPL-3.0，本项目只通过运行时接口调用，不复制其代码）。
 - 情绪维度参考 PAD / VAD 情绪模型的简化三维扩展。
 
 ## 许可
 
 **[AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)**（GNU Affero General Public License v3.0），全文见 [LICENSE](LICENSE)。
-
-它和你熟悉的 MIT 只差一条要紧的：**如果改过的版本被部署成对外提供服务的机器人，改动也要按同样协议开放出来**。私用、自用部署、改着玩都不受影响，也不需要把改动公开。
-
-- **用它**：随便用，包括放在自己的服务器上给群里用。
-- **改它**：可以；分发或对外提供服务时，同样以 AGPL-3.0 提供源码。
-- **引用它**：注明来源与本协议。
-- **不担保**：按「现状」提供，没有任何明示或默示担保；周期推算是角色扮演用的模拟，不是医学建议、不能用于避孕或备孕。
-
-选择它的另一个原因是：本插件通过运行时接口对接的 [astrbot_plugin_self_learning](https://github.com/NickCharlie/astrbot_plugin_self_learning) 本身是 AGPL-3.0，保持同协议，二次分发时不用再纠结条款兼容。
 

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>生理周期 · 控制台</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">🩸</span>
+          <div class="brand-text">
+            <h1>生理周期 · 控制台</h1>
+            <p id="subtitle">正在读取…</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span class="chip strong" id="chip-mode">—</span>
+          <span class="chip" id="chip-link">—</span>
+          <button class="btn ghost" id="btn-refresh" type="button">刷新</button>
+        </div>
+      </header>
+
+      <section class="stats" id="stats" aria-live="polite"></section>
+
+      <main class="split">
+        <aside class="panel panel-users">
+          <div class="panel-head">
+            <h2>档案</h2>
+            <input
+              id="search"
+              class="input"
+              type="search"
+              placeholder="搜昵称或 ID"
+              autocomplete="off"
+            />
+          </div>
+          <ul class="user-list" id="user-list"></ul>
+          <p class="empty" id="users-empty" hidden>
+            还没有任何记录。让她在聊天里发一句「经期 开始」，这里就会出现。
+          </p>
+          <div class="user-foot" id="user-foot"></div>
+        </aside>
+
+        <section class="panel panel-detail" id="detail">
+          <div class="placeholder" id="placeholder">
+            <span class="big">🌙</span>
+            <p>左边选一个档案，看她的这一轮。</p>
+          </div>
+        </section>
+      </main>
+
+      <div class="toasts" id="toasts" aria-live="assertive"></div>
+    </div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

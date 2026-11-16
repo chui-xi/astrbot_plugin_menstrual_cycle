@@ -1,0 +1,255 @@
+{
+  "enable_llm_injection": {
+    "description": "把周期状态注入系统提示词",
+    "type": "bool",
+    "default": true,
+    "hint": "打开后，角色在对话里会自然带上当前阶段的身体感受和情绪；关闭则只有查询命令，模型感知不到。"
+  },
+  "injection_max_chars": {
+    "description": "状态卡最大字符数",
+    "type": "int",
+    "default": 900,
+    "slider": {
+      "min": 200,
+      "max": 2000,
+      "step": 50
+    },
+    "hint": "太大占用上下文，太小会截断。900 字左右能完整放进身体、情绪和表达要求。"
+  },
+  "injection_numbers": {
+    "description": "注入时附带情绪数值",
+    "type": "bool",
+    "default": true,
+    "hint": "数值帮助模型把握程度（比如压力 0.63 比“有点烦”更精确）；不想要数字就关掉，只保留自然语言描述。"
+  },
+  "cycle_scope": {
+    "description": "周期归谁",
+    "type": "string",
+    "default": "character",
+    "options": [
+      "character",
+      "user"
+    ],
+    "labels": [
+      "她自己一条（跟谁聊都是同一个身体）",
+      "每个聊天对象各一条"
+    ],
+    "hint": "character：她独立拥有生理周期，聊天时自然带入，不记录对方是谁，也不需要谁来记；user：每个人分别建档、分别推算。"
+  },
+  "character_name": {
+    "description": "她叫什么",
+    "type": "string",
+    "default": "",
+    "hint": "第一次替她建档时用的名字，留空就叫「她」；面板「设置」里也能随时改。"
+  },
+  "enable_selflearn_sync": {
+    "description": "联动 Self Learning 的情绪系统",
+    "type": "bool",
+    "default": true,
+    "hint": "会写入对方的 BotMood（按会话），影响它的人格语气。没装这个插件时会自动跳过，不会报错。"
+  },
+  "enable_llm_voice": {
+    "description": "让模型写文案（总开关）",
+    "type": "bool",
+    "default": true,
+    "hint": "关掉则完全用内置文案。下面的 voice_mode 决定是「每周期写一次」还是「每次现写」。"
+  },
+  "voice_mode": {
+    "description": "文案生成方式",
+    "type": "string",
+    "default": "cycle",
+    "options": [
+      "cycle",
+      "realtime",
+      "off"
+    ],
+    "labels": [
+      "每周期写一次（省，推荐）",
+      "每次实时生成（活，但慢且花钱）",
+      "关闭（全用内置文案）"
+    ],
+    "hint": "cycle：换周期时调用一次模型，整轮复用；realtime：查询状态、发提醒时现场调你的对话模型写这一句。"
+  },
+  "realtime_injection": {
+    "description": "实时模式下也每条消息都现写",
+    "type": "bool",
+    "default": false,
+    "hint": "打开后每次对话都会多一次模型调用，回复会明显变慢、成本按消息数增长。只想要提醒和查询实时，保持关闭即可。"
+  },
+  "live_interval": {
+    "description": "实时生成的复用窗口（秒）",
+    "type": "int",
+    "default": 25,
+    "slider": {
+      "min": 0,
+      "max": 300,
+      "step": 5
+    },
+    "hint": "窗口内连着问不重复调模型，避免一句话触发好几次。设 0 就是每次真的现写。"
+  },
+  "voice_timeout": {
+    "description": "生成文案的超时（秒）",
+    "type": "int",
+    "default": 20,
+    "slider": {
+      "min": 8,
+      "max": 90,
+      "step": 2
+    },
+    "hint": "超时就放弃这次，改用内置文案，不会卡住对话。"
+  },
+  "enable_chatplus_sync": {
+    "description": "联动 Group Chat Plus 的群情绪",
+    "type": "bool",
+    "default": true,
+    "hint": "会把阶段情绪写进它的 MoodTracker（按会话，纯内存），影响它读空气的效果。没装时自动跳过。"
+  },
+  "auto_sync_on_change": {
+    "description": "记录或查询后自动同步情绪",
+    "type": "bool",
+    "default": false,
+    "hint": "打开后每次「经期 开始/状态」都会写一次对方的心情；关闭则只在「经期 同步」时写。"
+  },
+  "mood_duration_hours": {
+    "description": "写入 Self Learning 的心情持续时长（小时）",
+    "type": "int",
+    "default": 24,
+    "slider": {
+      "min": 1,
+      "max": 72,
+      "step": 1
+    },
+    "hint": "经期情绪一天一变，24 小时比较合适；设太长会和真实周期脱节。"
+  },
+  "enable_reminder": {
+    "description": "开启主动提醒",
+    "type": "bool",
+    "default": false,
+    "hint": "让她在经期前一天、第一天、PMS 段、快结束时主动说一句。周期归她自己时一般不用开，开了也只是她自己的口吻。"
+  },
+  "reminder_check_minutes": {
+    "description": "提醒检查间隔（分钟）",
+    "type": "int",
+    "default": 20
+  },
+  "reminder_hour_from": {
+    "description": "允许提醒的起始小时",
+    "type": "int",
+    "default": 9
+  },
+  "reminder_hour_to": {
+    "description": "允许提醒的结束小时",
+    "type": "int",
+    "default": 23,
+    "hint": "默认 9 点到 23 点之间才会发，避免半夜吵人。跨零点就填起始大于结束。"
+  },
+  "default_cycle_length": {
+    "description": "默认周期长度（天）",
+    "type": "int",
+    "default": 28,
+    "hint": "新用户还没有历史记录时先用这个推；记录够 3 次之后会自动改成历史中位数。"
+  },
+  "default_period_length": {
+    "description": "默认经期长度（天）",
+    "type": "int",
+    "default": 5
+  },
+  "default_cycle_day": {
+    "description": "默认从第几天开始",
+    "type": "int",
+    "default": 0,
+    "hint": "第一次替她建档时落在周期的第几天（1～周期长度）；填 0 就是随机挑一天。"
+  },
+  "default_pain_sensitivity": {
+    "description": "默认疼痛敏感度",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0.2,
+      "max": 2.5,
+      "step": 0.1
+    },
+    "hint": "1.0 是标准；往上更怕疼。建档后还能在面板里单独改。"
+  },
+  "default_emotion_gain": {
+    "description": "默认情绪幅度",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0.2,
+      "max": 2.5,
+      "step": 0.1
+    }
+  },
+  "default_pms_strength": {
+    "description": "默认 PMS 强度",
+    "type": "float",
+    "default": 1.0,
+    "slider": {
+      "min": 0.0,
+      "max": 3.0,
+      "step": 0.1
+    },
+    "hint": "1.0 是标准，0 等于没有经前期。"
+  },
+  "remember_session": {
+    "description": "记住最近会话用于主动提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "关掉后不会保存会话来源，也就没法主动推送提醒。"
+  },
+  "enable_comfort_buff": {
+    "description": "她说“多喝热水/抱抱/我来做”这类关心时，让她当下真的好受一点",
+    "type": "bool",
+    "default": true,
+    "hint": "会持续几个小时再慢慢淡掉；同类关心有冷却，连刷不会叠加满值"
+  },
+  "comfort_hours": {
+    "description": "一次关心持续多久（小时）",
+    "type": "float",
+    "default": 6.0,
+    "slider": {
+      "min": 1,
+      "max": 12,
+      "step": 0.5
+    }
+  },
+  "reminder_style": {
+    "description": "主动提醒的口吻",
+    "type": "string",
+    "default": "in_character",
+    "options": [
+      "in_character",
+      "reminder"
+    ],
+    "labels": [
+      "用她的口吻说",
+      "系统提醒口吻"
+    ],
+    "hint": "前者像她发来的消息，后者像健康提醒"
+  },
+  "enable_dashboard": {
+    "type": "bool",
+    "description": "在 AstrBot 面板里显示「生理周期 · 控制台」页面（可看周期、改记录与设置、重写文案）",
+    "hint": "关掉只是隐藏面板入口，不影响聊天里的功能",
+    "default": true
+  },
+  "enable_admin_only": {
+    "description": "只有管理员能动指令",
+    "type": "bool",
+    "default": true,
+    "hint": "打开后，只有 AstrBot「管理员 ID」列表里的号（以及下面 extra_admins 里补的号）能用「经期」系列指令和记录工具；面板不受影响，它自己要走 Dashboard 登录。"
+  },
+  "extra_admins": {
+    "description": "额外允许的号",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔。不想动全局 admins_id 时，把要放行的 QQ/用户 ID 填这里。"
+  },
+  "admin_deny_reply": {
+    "description": "非管理员时回一句",
+    "type": "bool",
+    "default": true,
+    "hint": "关掉就完全不吭声，群里看不出这个插件存在。"
+  }
+}

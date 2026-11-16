@@ -125,7 +125,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.7.2"
+    version = "1.7.3"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
@@ -173,7 +173,7 @@ class MenstrualCyclePlugin(Star):
             timeout=float(self._cfg("voice_timeout", 20)),
             path=self.data_dir / "voice_cache.json",
             mode=str(self._cfg("voice_mode", "cycle")),
-            live_interval=float(self._cfg("live_interval", 25)),
+            live_interval=float(self._cfg("live_interval", 300)),
         )
 
     def _realtime(self, scope: str = "") -> bool:
@@ -284,7 +284,7 @@ class MenstrualCyclePlugin(Star):
             # 注入是主回复的前置步骤，不能为了文案把人晾在那十几秒。
             voice = None
             if self._realtime("injection"):
-                budget = int(self._cfg("injection_wait_ms", 1500) or 0)
+                budget = int(self._cfg("injection_wait_ms", 0) or 0)
                 if budget > 0:
                     try:
                         voice = await asyncio.wait_for(
@@ -654,9 +654,23 @@ class MenstrualCyclePlugin(Star):
                 yield event.plain_result(tt.render_brief(profile, state))
                 return
             if self._realtime():
-                # 实时模式：查一次现写一次，写不出来就用内置的
-                voice = await self.voice.live(profile, state)
+                # 查一次等三秒太蠢：先用上一次现写好的，没有就后台补一份新的
+                voice = self.voice.live_cached(profile)
                 fresh = False
+                if voice is None:
+                    budget = int(self._cfg("injection_wait_ms", 0) or 0)
+                    if budget > 0:
+                        try:
+                            voice = await asyncio.wait_for(
+                                self.voice.live(profile, state),
+                                timeout=budget / 1000.0,
+                            )
+                        except (asyncio.TimeoutError, TimeoutError):
+                            voice = None
+                    if voice is None:
+                        voice = self.voice.cached(profile, state)
+                        fresh = True
+                        self.voice.schedule(profile, state)
             else:
                 voice = self.voice.cached(profile, state)
                 fresh = voice is None

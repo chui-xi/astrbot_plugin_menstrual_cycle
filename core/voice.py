@@ -189,7 +189,7 @@ class VoiceGenerator:
         timeout: float = 20.0,
         ask: Callable[[str], Awaitable[str | None]] | None = None,
         path: str | Path | None = None,
-        live_interval: float = 25.0,
+        live_interval: float = 300.0,
         mode: str = "cycle",
     ) -> None:
         self.plugin = plugin
@@ -203,8 +203,8 @@ class VoiceGenerator:
         self._path = Path(path) if path else None
         self._packs: dict[str, VoicePack] = {}
         self._tasks: dict[str, asyncio.Task] = {}
-        # 实时生成的短缓存：同一分钟内连着问，不用连着调模型
-        self._live: dict[str, tuple[float, VoicePack]] = {}
+        # 实时生成的短缓存：同一阶段、同一天里连着聊，不用每条都调一次模型
+        self._live: dict[str, tuple[float, VoicePack, int]] = {}
         self._loaded = False
         self._failures: dict[str, str] = {}
         self.last_error = ""
@@ -452,6 +452,14 @@ class VoiceGenerator:
         self._packs.pop(user_key, None)
         self._live.pop(user_key, None)
 
+    def live_cached(self, profile: UserProfile) -> VoicePack | None:
+        """上一次现写的文案，不判断新鲜度。
+
+        给「先回一句、别让人干等」的场景（命令查询）用：有就用，没有就去后台补。
+        """
+        hit = self._live.get(profile.user_key)
+        return hit[1] if hit is not None else None
+
     # -------------------------------------------------------------- 实时生成
     def _live_prompt(self, profile: UserProfile, state: PhaseState, hint: str = "") -> str:
         who = profile.nickname or "她"
@@ -520,8 +528,12 @@ class VoiceGenerator:
         now = time.monotonic()
         hit = self._live.get(profile.user_key)
         if hit is not None and not force:
-            stamp, pack = hit
-            if now - stamp < self.live_interval and pack.phase(state.phase.key):
+            stamp, pack, day = hit
+            if (
+                now - stamp < self.live_interval
+                and day == state.cycle_day
+                and pack.phase(state.phase.key)
+            ):
                 return pack
         raw = await self._ask_model(self._live_prompt(profile, state, hint))
         if not raw:
@@ -536,7 +548,7 @@ class VoiceGenerator:
             general = pack.reminders.get(state.phase.key)
             if general:
                 pack.reminders[kind] = general
-        self._live[profile.user_key] = (now, pack)
+        self._live[profile.user_key] = (now, pack, state.cycle_day)
         self.last_error = ""
         return pack
 

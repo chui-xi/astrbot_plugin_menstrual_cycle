@@ -1,9 +1,9 @@
-name: astrbot_plugin_menstrual_cycle
+﻿name: astrbot_plugin_menstrual_cycle
 display_name: 生理周期 · 情绪共鸣
 desc: 用真实的月经周期驱动角色的身体状态与情绪：五阶段推算、情绪向量、状态注入提示词，能被关心缓和、能自报疼痛、会识别周期不规律；文案可交给你的对话模型按周期重写，也可以每次实时现写，心情还能写进 Self Learning 与 Group Chat Plus；自带面板可看周期、改她的名字与开始日、改历史记录与当下状态、钉住任意一维情绪、重写文案；周期归她自己一条，群聊私聊共用一个身体。
 short_desc: 让她真的有生理周期，会疼、会馋、会烦，被哄会好一点。
 author: chui-xi
-version: 1.7.2
+version: 1.7.3
 astrbot_version: ">=4.9.2,<5"
 repo: https://github.com/chui-xi/astrbot_plugin_menstrual_cycle
 support_platforms:

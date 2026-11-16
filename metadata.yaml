@@ -5,6 +5,7 @@ short_desc: 让她真的有生理周期，会疼、会馋、会烦，被哄会�
 author: YG
 version: 1.7.1
 astrbot_version: ">=4.9.2,<5"
+repo: https://github.com/chui-xi/astrbot_plugin_menstrual_cycle
 support_platforms:
   - aiocqhttp
   - qq_official

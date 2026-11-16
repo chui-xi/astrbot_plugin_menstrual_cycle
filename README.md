@@ -147,7 +147,7 @@ AstrBot 插件。把真实的月经周期映射成角色的**身体状态**和**
 
 ```bash
 cd AstrBot/data/plugins
-git clone https://github.com/USER/astrbot_plugin_menstrual_cycle.git
+git clone https://github.com/chui-xi/astrbot_plugin_menstrual_cycle.git
 ```
 
 克隆下来的目录名必须保持 `astrbot_plugin_menstrual_cycle`，AstrBot 靠它和 `metadata.yaml` 里的 `name` 对号。

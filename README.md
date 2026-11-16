@@ -498,11 +498,10 @@ Self Learning 没有对外开放的情绪 API，所以这里做三层，逐层�
 astrbot_plugin_menstrual_cycle/
 ├── main.py              # 插件入口：命令分发、提示词注入、LLM 工具、提醒循环
 ├── metadata.yaml        # 插件元信息（name/version/astrbot_version）
-├── _conf_schema.json    # 32 项配置的声明与默认值
+├── _conf_schema.json    # 33 项配置的声明与默认值
 ├── logo.png
 ├── README.md
 ├── LICENSE              # AGPL-3.0
-├── .gitignore
 ├── views/
 │   └── dashboard/       # 面板：原生 JS，无构建，跟随 Dashboard 明暗主题
 │       ├── index.html
@@ -511,8 +510,6 @@ astrbot_plugin_menstrual_cycle/
 ├── skills/
 │   └── period-cycle/
 │       └── SKILL.md     # 可选 Agent 技能：教模型什么时候查周期、怎么用她的语气说
-├── tests/
-│   └── run_test.py      # 371 项断言，stub 掉宿主模块，不装 AstrBot 也能跑
 └── core/
     ├── models.py        # 情绪向量、周期记录、阶段定义、Comfort（被哄状态）
     ├── engine.py        # 周期求解：中位数周期、关键帧插值、阶段边界、状态叠加
@@ -529,7 +526,7 @@ astrbot_plugin_menstrual_cycle/
 
 发布包是扁平结构：`metadata.yaml`、`main.py`、`core/`、`views/`、`skills/` 全在包根，避免面板上传时多套一层目录。
 
-本地自测（stub 掉宿主模块，不需要装 AstrBot；脚本就在仓库的 `tests/` 里）：
+本地自测（stub 掉宿主模块，不需要装 AstrBot；脚本在开发机的 `tests/` 里，不随仓库和发布包发布）：
 
 ```bash
 python tests/run_test.py

@@ -85,7 +85,7 @@ AstrBot 插件。把真实的月经周期映射成角色的**身体状态**和**
 
 ## 效果
 
-下面是插件的真实输出（跑 `tests/demo.py` 打出来的），不是示意图。
+下面是插件的真实输出，不是示意图。
 
 ```
 你：肚子疼不疼
@@ -507,10 +507,8 @@ astrbot_plugin_menstrual_cycle/
 ├── skills/
 │   └── period-cycle/
 │       └── SKILL.md     # 可选 Agent 技能：教模型什么时候查周期、怎么用她的语气说
-├── tests/               # 自测与打包脚本，不进 zip
-│   ├── run_test.py      # 371 项断言，stub 掉宿主模块，不装 AstrBot 也能跑
-│   ├── demo.py          # 打印真实渲染结果（状态卡/注入/提醒/模型文案前后对比）
-│   └── build_zip.py     # 打扁平包（排除 tests/ 与 __pycache__）
+├── tests/
+│   └── run_test.py      # 371 项断言，stub 掉宿主模块，不装 AstrBot 也能跑
 └── core/
     ├── models.py        # 情绪向量、周期记录、阶段定义、Comfort（被哄状态）
     ├── engine.py        # 周期求解：中位数周期、关键帧插值、阶段边界、状态叠加
@@ -525,7 +523,7 @@ astrbot_plugin_menstrual_cycle/
 
 `core/` 不依赖 AstrBot，`text.py` 是唯一有文案的地方，改语气只改它；`comfort.py` 是唯一有词表的地方，想加"草莓蛋糕""帮你请假"只改它。
 
-打包用的是扁平结构（`tests/build_zip.py`）：`metadata.yaml`、`main.py`、`core/`、`views/`、`skills/` 全在包根，避免面板上传时多套一层目录。
+发布包是扁平结构：`metadata.yaml`、`main.py`、`core/`、`views/`、`skills/` 全在包根，避免面板上传时多套一层目录。
 
 本地自测（stub 掉宿主模块，不需要装 AstrBot；脚本就在仓库的 `tests/` 里）：
 
@@ -541,7 +539,7 @@ python tests/run_test.py
 - **面板接口**：路由、概览、详情、增删改记录（含日期校验与重叠拦截）、状态改写、设置校验、重写文案、降级
 - **联动与权限**：Self Learning / Group Chat Plus 的探测与降级、只认管理员的指令闸门
 
-共 371 项断言。`demo.py` 会打印真实渲染结果（含同一份数值换成模型文案的前后对比）。`build_zip.py` 生成可直接上传的扁平包。
+共 371 项断言。
 
 ---
 

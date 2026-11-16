@@ -125,7 +125,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.7.1"
+    version = "1.7.2"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
@@ -280,14 +280,30 @@ class MenstrualCyclePlugin(Star):
             state = compute_state(profile)
             if state is None:
                 return
-            # 这一轮模型自己写的文案：实时模式就现写，否则用这一轮的缓存
+            # 这一轮模型自己写的文案：实时模式现写，但只等一个小预算。
+            # 注入是主回复的前置步骤，不能为了文案把人晾在那十几秒。
             voice = None
             if self._realtime("injection"):
-                voice = await self.voice.live(
-                    profile,
-                    state,
-                    hint=getattr(event, "message_str", "") or "",
-                )
+                budget = int(self._cfg("injection_wait_ms", 1500) or 0)
+                if budget > 0:
+                    try:
+                        voice = await asyncio.wait_for(
+                            self.voice.live(
+                                profile,
+                                state,
+                                hint=getattr(event, "message_str", "") or "",
+                            ),
+                            timeout=budget / 1000.0,
+                        )
+                    except (asyncio.TimeoutError, TimeoutError):
+                        voice = None
+                        self._log.info(
+                            "[menstrual] 文案生成超过 %d ms，这一条先用现成的", budget
+                        )
+                        self.voice.schedule(profile, state)
+                else:
+                    # 0 = 一秒都不等：用上一次写好的，后台再补一份新的
+                    self.voice.schedule(profile, state)
             if voice is None:
                 voice = self.voice.cached(profile, state)
                 if voice is None:

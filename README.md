@@ -510,9 +510,7 @@ astrbot_plugin_menstrual_cycle/
 ├── tests/               # 自测与打包脚本，不进 zip
 │   ├── run_test.py      # 371 项断言，stub 掉宿主模块，不装 AstrBot 也能跑
 │   ├── demo.py          # 打印真实渲染结果（状态卡/注入/提醒/模型文案前后对比）
-│   ├── make_preview.py  # 用真实接口数据生成面板的静态预览
-│   ├── build_zip.py     # 打扁平包（排除 tests/ 与 __pycache__）
-│   └── import_4293.py   # 按 4.29.3 布局搭影子包，验证导入面
+│   └── build_zip.py     # 打扁平包（排除 tests/ 与 __pycache__）
 └── core/
     ├── models.py        # 情绪向量、周期记录、阶段定义、Comfort（被哄状态）
     ├── engine.py        # 周期求解：中位数周期、关键帧插值、阶段边界、状态叠加
@@ -543,7 +541,7 @@ python tests/run_test.py
 - **面板接口**：路由、概览、详情、增删改记录（含日期校验与重叠拦截）、状态改写、设置校验、重写文案、降级
 - **联动与权限**：Self Learning / Group Chat Plus 的探测与降级、只认管理员的指令闸门
 
-共 371 项断言。`demo.py` 会打印真实渲染结果（含同一份数值换成模型文案的前后对比）。`make_preview.py` 用真实接口数据生成四份静态预览（`dashboard_preview_dark.html` / `_light.html` / `_edit.html` / `_new.html`，输出在 `tests/`），改面板样式时用它核对，不必起 AstrBot。`build_zip.py` 生成可直接上传的扁平包，`import_4293.py` 检查在 AstrBot 4.29.3 的模块布局下能否正常 import。
+共 371 项断言。`demo.py` 会打印真实渲染结果（含同一份数值换成模型文案的前后对比）。`build_zip.py` 生成可直接上传的扁平包。
 
 ---
 

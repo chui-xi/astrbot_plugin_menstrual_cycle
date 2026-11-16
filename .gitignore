@@ -32,3 +32,10 @@ reminders.json
 voice_cache.json
 emotion_snapshot.json
 *.broken.*.json
+
+# ×Ô²âÊä³ö
+tests/out.txt
+tests/err.txt
+tests/dashboard_preview_*.html
+tests/dashboard_shot_*.png
+tests/dashboard_trend_crop.png

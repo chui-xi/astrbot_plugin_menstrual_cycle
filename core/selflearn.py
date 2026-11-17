@@ -19,16 +19,12 @@ import contextlib
 import importlib
 import inspect
 import json
-import logging
 import sys
 import time
 import typing
 from typing import Any
 
-try:  # 插件里复用宿主 logger；脱离 AstrBot 时退回标准库
-    from astrbot.api import logger
-except Exception:  # pragma: no cover
-    logger = logging.getLogger("astrbot_plugin_menstrual_cycle")
+from astrbot.api import logger
 
 PLUGIN_NAMES = (
     "astrbot_plugin_self_learning",

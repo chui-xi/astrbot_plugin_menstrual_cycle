@@ -290,6 +290,15 @@ function renderStats(data) {
         )}</div></div>`,
     )
     .join("");
+
+  const perf = (data && data.perf) || {};
+  if (perf.count) {
+    const mid = perf.p50 === null || perf.p50 === undefined ? "—" : `${perf.p50} ms`;
+    const tail = perf.p95 === null || perf.p95 === undefined ? "—" : `${perf.p95} ms`;
+    el.stats.innerHTML += `<div class="stat wide"><div class="k">插件自己花的时间（注入 ${
+      perf.count
+    } 次）</div><div class="v">中位 ${esc(mid)} · 90% 在 ${esc(tail)} 以内</div></div>`;
+  }
 }
 
 function renderList(users) {
@@ -435,6 +444,7 @@ function renderDetail(data) {
       </div>
       ${stateBlock(data)}
       ${trendBlock(data)}
+      ${calendarBlock(data)}
       ${injectionBlock(data)}
       ${recordsBlock(data)}
       ${formBlock(settings, user)}
@@ -560,6 +570,7 @@ function renderDetail(data) {
 
     ${stateBlock(data)}
     ${trendBlock(data)}
+      ${calendarBlock(data)}
     ${injectionBlock(data)}
     ${recordsBlock(data)}
     ${formBlock(settings, user)}
@@ -817,10 +828,65 @@ function formBlock(settings, user) {
       </div>
       <div class="form-foot">
         <button class="btn primary" data-act="save">保存设置</button>
+        <button class="btn" data-act="export">导出 JSON</button>
+        <button class="btn" data-act="import">导入 JSON</button>
         <button class="btn danger" data-act="reset">重置档案</button>
-        <span class="note">改完立刻生效，下一句回复就用新设置。</span>
+        <input id="import-file" type="file" accept="application/json,.json" hidden />
+        <span class="note">改完立刻生效，下一句回复就用新设置。导出的是这一份档案，换机器时导入同一个人身上。</span>
       </div>
     </div>
+  </div>`;
+}
+
+
+/* 月历：把 45 天回看 + 60 天预测铺成格子 */
+function calendarBlock(data) {
+  const days = (data && data.calendar) || [];
+  if (!days.length) return "";
+  const months = new Map();
+  for (const day of days) {
+    const month = String(day.date).slice(0, 7);
+    if (!months.has(month)) months.set(month, []);
+    months.get(month).push(day);
+  }
+  const body = [...months.entries()]
+    .map(([month, items]) => {
+      const [year, mm] = month.split("-");
+      const first = new Date(`${items[0].date}T00:00:00`);
+      const lead = (first.getDay() + 6) % 7; /* 周一开头 */
+      const cells = [];
+      for (let i = 0; i < lead; i += 1) cells.push('<span class="cal-cell blank"></span>');
+      for (const day of items) {
+        const cls = ["cal-cell", `is-${day.kind || "none"}`];
+        if (day.today) cls.push("is-today");
+        const value = Number(day.date.slice(8, 10));
+        const hasPain = day.pain !== null && day.pain !== undefined;
+        const dot = hasPain
+          ? `<i class="cal-dot" style="opacity:${(0.3 + clamp01(day.pain) * 0.7).toFixed(2)}"></i>`
+          : "";
+        const title = hasPain
+          ? `${day.date} · 自报疼 ${Math.round(clamp01(day.pain) * 10)}/10`
+          : day.date;
+        cells.push(
+          `<span class="${cls.join(" ")}" title="${esc(title)}">${value}${dot}</span>`,
+        );
+      }
+      return `<div class="cal">
+        <div class="cal-head">${esc(year)} 年 ${Number(mm)} 月</div>
+        <div class="cal-week">${["一", "二", "三", "四", "五", "六", "日"]
+          .map((name) => `<span>${name}</span>`)
+          .join("")}</div>
+        <div class="cal-grid">${cells.join("")}</div>
+      </div>`;
+    })
+    .join("");
+
+  return `<div class="panel">
+    <div class="panel-head">
+      <h3>日历</h3>
+      <span class="hint"><i class="cal-key is-period"></i>记过的经期　<i class="cal-key is-predicted"></i>推算　<i class="cal-key is-today"></i>今天　·　小圆点是自报疼痛</span>
+    </div>
+    <div class="cal-wrap">${body}</div>
   </div>`;
 }
 
@@ -968,6 +1034,63 @@ async function postState(payload) {
   }
 }
 
+
+/* 导出这一份档案：优先用 bridge 的下载通道，退回 Blob */
+async function exportUser() {
+  const key = app.key;
+  if (!key) return;
+  const nickname = (app.detail && app.detail.user && app.detail.user.nickname) || "profile";
+  const filename = `menstrual-${String(nickname).replace(/[\\/:*?"<>|\s]+/g, "_")}-${todayIso()}.json`;
+  try {
+    const bridge = app.bridge;
+    if (bridge && typeof bridge.download === "function") {
+      await bridge.download("export", { key }, filename);
+      toast("已导出，去下载里看看", "ok");
+      return;
+    }
+    const data = await apiGet("export", { key });
+    if (!data || data.ok === false) throw new Error(errorText(data));
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    toast("已导出", "ok");
+  } catch (error) {
+    toast(`导出失败：${errorText(error)}`, "err");
+  }
+}
+
+/* 导入：选一份导出过的 JSON，盖在同一个人身上 */
+async function importFile(input) {
+  const key = app.key;
+  const file = input.files && input.files[0];
+  input.value = "";
+  if (!key || !file) return;
+  if (app.busy) return;
+  busy(true);
+  try {
+    const text = await file.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("这个文件不是 JSON");
+    }
+    const res = await postAction("import", { data });
+    if (!res || res.ok === false) throw new Error((res && res.message) || "没有导入成功");
+    toast(res.message || "已导入", "ok");
+    if (res.detail) renderDetail({ ...res.detail });
+    await refresh();
+  } catch (error) {
+    toast(`导入失败：${errorText(error)}`, "err");
+  } finally {
+    busy(false);
+  }
+}
+
 /* 从左侧内联表单建档案 */
 async function createUser() {
   const pick = (id) => {
@@ -1068,6 +1191,17 @@ async function act(name, node) {
     } finally {
       busy(false);
     }
+    return;
+  }
+
+  if (name === "export") {
+    await exportUser();
+    return;
+  }
+
+  if (name === "import") {
+    const input = document.getElementById("import-file");
+    if (input) input.click();
     return;
   }
 
@@ -1301,6 +1435,11 @@ function bindEvents() {
     const button = event.target.closest("[data-act]");
     if (!button) return;
     act(button.dataset.act, button);
+  });
+
+  el.detail.addEventListener("change", (event) => {
+    const input = event.target.closest("#import-file");
+    if (input) importFile(input);
   });
 }
 

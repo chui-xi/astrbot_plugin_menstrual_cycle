@@ -15,6 +15,7 @@ import statistics
 from datetime import date, datetime, timedelta
 
 from .models import (
+    CONSTITUTIONS,
     PHASE_SPECS,
     Comfort,
     EmotionVector,
@@ -186,7 +187,82 @@ def _apply_pain_log(
     ).clamped()
 
 
+def _apply_constitution(
+    vector: EmotionVector, settings: UserSettings
+) -> EmotionVector:
+    """体质预设：同一条曲线落在不同身体上，疼法与起伏都该不一样。
+
+    放在 ``_apply_modifiers`` 之后，是「再乘一层」——所以 ``pain_sensitivity``
+    拉到 2.0 又选「经期重」会很极端，这是故意的：谁都能把数值调到不合理。
+    """
+    preset = CONSTITUTIONS.get(settings.constitution) or CONSTITUTIONS["balanced"]
+    gain = float(preset["emotion"])
+    return EmotionVector(
+        valence=clamp(vector.valence * gain, -1.0, 1.0),
+        arousal=vector.arousal,
+        energy=clamp(vector.energy * float(preset["energy"])),
+        stress=clamp(vector.stress * (1.0 + (gain - 1.0) * 0.5)),
+        pain=clamp(vector.pain * float(preset["pain"])),
+        sensitive=clamp(vector.sensitive + float(preset["sensitive"])),
+        libido=vector.libido,
+        social=clamp(vector.social * (1.0 - (gain - 1.0) * 0.3)),
+    ).clamped()
+
+
+def phase_baseline(
+    profile: UserProfile, phase_key: str, minimum: int = 3
+) -> float | None:
+    """她在这个阶段自己报过的疼痛中位数。
+
+    样本少时不给值：两次「今天特别疼」不足以说明她每个月经期都这样，
+    拿它去改曲线反而会越学越歪。
+    """
+    values = profile.phase_pain.get(phase_key) or []
+    if len(values) < max(1, minimum):
+        return None
+    try:
+        return clamp(float(statistics.median(values)))
+    except statistics.StatisticsError:
+        return None
+
+
+def _apply_phase_baseline(
+    vector: EmotionVector, learned: float | None, weight: float = 0.3
+) -> EmotionVector:
+    """把「这个阶段她一般疼多少」按权重混进来，剩下的交给当天曲线。"""
+    if learned is None:
+        return vector
+    ratio = clamp(weight, 0.0, 0.8)
+    blended = clamp(vector.pain * (1.0 - ratio) + clamp(learned) * ratio)
+    delta = blended - vector.pain
+    if abs(delta) < 0.005:
+        return vector
+    if delta > 0:
+        return EmotionVector(
+            valence=clamp(vector.valence - delta * 0.4, -1.0, 1.0),
+            arousal=vector.arousal,
+            energy=clamp(vector.energy - delta * 0.3),
+            stress=clamp(vector.stress + delta * 0.25),
+            pain=blended,
+            sensitive=clamp(vector.sensitive + delta * 0.15),
+            libido=vector.libido,
+            social=clamp(vector.social - delta * 0.15),
+        ).clamped()
+    gain = -delta
+    return EmotionVector(
+        valence=clamp(vector.valence + min(0.12, gain * 0.3), -1.0, 1.0),
+        arousal=vector.arousal,
+        energy=clamp(vector.energy + min(0.10, gain * 0.25)),
+        stress=clamp(vector.stress - min(0.10, gain * 0.2)),
+        pain=blended,
+        sensitive=clamp(vector.sensitive - min(0.06, gain * 0.1)),
+        libido=vector.libido,
+        social=clamp(vector.social + min(0.06, gain * 0.1)),
+    ).clamped()
+
+
 def _resolve_period_length(profile: UserProfile, fallback: int) -> int:
+    """经期长度用已结束记录的中位数，没有记录时用设置值。"""
     lengths = [record.length for record in profile.sorted_periods() if record.length]
     if not lengths:
         return max(2, min(10, fallback))
@@ -324,7 +400,13 @@ def compute_state(
 
     base = _vector_at(reference_day)
     vector = _apply_modifiers(base, phase, profile.settings)
+    vector = _apply_constitution(vector, profile.settings)
     vector = _jitter(vector, f"{profile.user_key}:{today.isoformat()}")
+
+    # 这个阶段她自己报过的平均值，把曲线慢慢拉向她的实际体感
+    if profile.settings.phase_learning:
+        learned = phase_baseline(profile, phase.key)
+        vector = _apply_phase_baseline(vector, learned, profile.settings.phase_weight)
 
     # 自报疼痛优先于曲线，随后叠加还在生效的「被哄」
     logged = pain_log_of(profile, today)

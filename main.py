@@ -3,7 +3,8 @@
 设计要点
 - 周期长度、经期长度都从中位数推，用户设置只作兜底；
 - 情绪按 28 天等效日插值，短周期长周期都能伸缩；
-- 状态通过 on_llm_request 注入系统提示词，模型只负责"演"，不用知道数值；
+- 状态通过 on_llm_request 注入到临时内容（不改 system_prompt，前缀缓存照常命中），
+  模型只负责"演"，不用知道数值；
 - 可选把状态推给 Self Learning 一类情绪插件，联动走 duck typing 探测。
 """
 
@@ -12,9 +13,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import importlib
+import inspect
 import json
 import random
 import re
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import date, datetime, timedelta
@@ -33,6 +36,7 @@ from .core import comfort as cm
 from .core import text as tt
 from .core.engine import compute_state, cycle_stats, predict_next_periods
 from .core.models import (
+    CONSTITUTIONS,
     PeriodRecord,
     PhaseState,
     UserProfile,
@@ -70,6 +74,32 @@ def _load_message_chain() -> Any:
 
 
 MessageChain = _load_message_chain()
+
+
+def _load_text_part() -> Any:
+    """跨版本拿 TextPart。
+
+    AstrBot 4.x 用 ``TextPart`` 承载"只给模型看、不落库"的临时内容
+    （``ContentPart.mark_as_temp()``）。官方路径是 ``astrbot.api.message_components``，
+    核心实现在 ``astrbot.core.agent.message``，更早的版本在 ``core.message.components``。
+    拿不到就返回 None——这时状态卡不注入，但命令、面板、提醒都不受影响。
+    """
+    for module_name in (
+        "astrbot.api.message_components",
+        "astrbot.core.agent.message",
+        "astrbot.core.message.components",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # pragma: no cover - 该版本没有这个模块
+            continue
+        part_cls = getattr(module, "TextPart", None)
+        if part_cls is not None:
+            return part_cls
+    return None
+
+
+TextPart = _load_text_part()
 
 PLUGIN_NAME = "astrbot_plugin_menstrual_cycle"
 # 周期归谁：character = 她自己有一条，跟谁聊都是同一个身体；user = 每个聊天对象各一条
@@ -125,7 +155,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.8.0"
+    version = "1.9.0"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
@@ -144,6 +174,12 @@ class MenstrualCyclePlugin(Star):
         self._sent: dict[str, str] = {}
         self._phase_sent: dict[str, str] = {}
         self._no_chain_warned = False
+        # 注入耗时与档位统计（面板要看，只留最近 200 次）
+        self._perf: dict[str, Any] = {
+            "recent": [],
+            "levels": {"brief": 0, "normal": 0, "full": 0},
+            "count": 0,
+        }
 
     # 三个联动模块都做成惰性 property：热重载或测试里绕过 __init__ 时不会 AttributeError
     @property
@@ -271,6 +307,7 @@ class MenstrualCyclePlugin(Star):
     ) -> None:
         if not self._cfg("enable_llm_injection", True):
             return
+        started = time.perf_counter()
         try:
             profile = await self._profile_for(event, create=False)
             if profile is None:
@@ -324,11 +361,59 @@ class MenstrualCyclePlugin(Star):
                 self_mention=bool(self._cfg("allow_self_mention", True)),
                 history_days=int(self._cfg("injection_history_days", 2) or 0),
             )
-            base = getattr(req, "system_prompt", "") or ""
-            req.system_prompt = f"{base}\n\n{block}" if base else block
+            if not self._append_injection(req, block):
+                return
             await self._remember_umo(profile, event)
+            self._record_injection(level, started)
         except Exception:
             self._log.exception("[menstrual] 注入状态失败")
+
+    def _append_injection(self, req: ProviderRequest, block: str) -> bool:
+        """把状态卡挂到临时内容上，绝不动 system_prompt。
+
+        系统提示词一动，前缀缓存整段作废——每轮都在变的状态卡就是最贵的写法。
+        ``extra_user_content_parts`` 带进来的内容只给这一次请求看，标成临时之后
+        也不会写回会话历史，缓存该命中还是命中。
+        """
+        parts = getattr(req, "extra_user_content_parts", None)
+        if parts is None or TextPart is None:
+            if not getattr(self, "_no_parts_warned", False):
+                self.__dict__["_no_parts_warned"] = True
+                self._log.warning(
+                    "[menstrual] 这个 AstrBot 版本没有 extra_user_content_parts，"
+                    "状态卡不注入；命令、面板、提醒照常"
+                )
+            return False
+        try:
+            part = TextPart(text=block)
+            marker = getattr(part, "mark_as_temp", None)
+            if callable(marker):
+                part = marker()
+            parts.append(part)
+            return True
+        except Exception:
+            self._log.exception("[menstrual] 状态卡挂载失败")
+            return False
+
+    def _record_injection(self, level: str, started: float) -> None:
+        """记一次注入的耗时与档位。面板用它回答「插件到底拖慢了多少」。"""
+        perf = self.__dict__.get("_perf")
+        if not isinstance(perf, dict):
+            # 热重载、或者测试里绕过 __init__ 时按需补一个
+            perf = {
+                "recent": [],
+                "levels": {"brief": 0, "normal": 0, "full": 0},
+                "count": 0,
+            }
+            self.__dict__["_perf"] = perf
+        elapsed = (time.perf_counter() - started) * 1000.0
+        perf["count"] = int(perf.get("count") or 0) + 1
+        levels = perf.setdefault("levels", {})
+        levels[level] = int(levels.get(level) or 0) + 1
+        recent = perf.setdefault("recent", [])
+        recent.append(round(elapsed, 2))
+        if len(recent) > 200:
+            del recent[: len(recent) - 200]
 
     async def _maybe_comfort(self, profile: UserProfile, event: AstrMessageEvent) -> None:
         """他递热水、抱一下、把事接过去——她当场就会松一点。
@@ -388,6 +473,8 @@ class MenstrualCyclePlugin(Star):
             value(string): log_start / log_end 使用的日期，格式 YYYY-MM-DD；log_pain 填 0-10 的疼痛程度；留空表示今天
         """
         act = (action or "").strip().lower()
+        if not self._cfg("enable_llm_tool", True):
+            return "这个工具被关掉了；直接用系统提示里的状态卡回答即可，不要声称记录了什么。"
         if (
             act.startswith("log")
             and self._admin_only()
@@ -426,6 +513,9 @@ class MenstrualCyclePlugin(Star):
             profile.trim_pain_logs()
             await self.store.upsert(profile)
             state = compute_state(profile)
+            if state is not None:
+                profile.remember_phase_pain(state.phase.key, level / 10.0)
+                await self.store.upsert(profile)
             return state.summary_line() if state else "已记录。"
 
         state = compute_state(profile)
@@ -642,6 +732,9 @@ class MenstrualCyclePlugin(Star):
             profile.trim_pain_logs()
             await self.store.upsert(profile)
             state = compute_state(profile)
+            if state is not None:
+                profile.remember_phase_pain(state.phase.key, level / 10.0)
+                await self.store.upsert(profile)
             body = tt.render_status(profile, state) if state else ""
             yield event.plain_result(f"记下了：今天疼 {level:g}/10。\n\n{body}".strip())
             await self._auto_sync(profile, state)
@@ -797,7 +890,7 @@ class MenstrualCyclePlugin(Star):
                 yield event.plain_result("没有可同步的状态。")
                 return
             snapshot = tt.selflearn_snapshot(profile, state)
-            chat_id = profile.last_umo or self._user_key(event)
+            chat_id = profile.last_umo or await self._user_key(event)
             ok, detail = await self.bridge.push(
                 snapshot,
                 group_id=chat_id,
@@ -1089,11 +1182,11 @@ class MenstrualCyclePlugin(Star):
     async def _profile_for(
         self, event: AstrMessageEvent, create: bool = True
     ) -> UserProfile | None:
-        key = self._user_key(event)
+        key = await self._user_key(event)
         character = self._scope() == CHARACTER_SCOPE
         if character:
             # 她自己的身体状态跟聊天对象无关，不记对方的昵称、平台、会话
-            return await self.ensure_character_profile()
+            return await self.ensure_character_profile(key)
 
         profile = await self.store.get(key)
         if profile is None:
@@ -1118,12 +1211,13 @@ class MenstrualCyclePlugin(Star):
             profile.last_umo = umo
         return profile
 
-    async def ensure_character_profile(self) -> UserProfile:
+    async def ensure_character_profile(self, key: str = "") -> UserProfile:
         """她自己那条周期，不存在就按「已经在走」的状态建出来。"""
-        profile = await self.store.get(CHARACTER_KEY)
+        target = key or await self._character_key()
+        profile = await self.store.get(target)
         if profile is not None:
             return profile
-        profile = UserProfile(user_key=CHARACTER_KEY)
+        profile = UserProfile(user_key=target)
         self._apply_default_settings(profile)
         name = str(self._cfg("character_name", "") or "").strip()
         if name:
@@ -1137,7 +1231,7 @@ class MenstrualCyclePlugin(Star):
         """把配置里的默认身体参数写进新档案（之后面板还能各自改）。"""
         settings = profile.settings
         for field_name, key, low, high in (
-            ("cycle_length", "default_cycle_length", 15, 60),
+            ("cycle_length", "default_cycle_length", 15, 90),
             ("period_length", "default_period_length", 1, 12),
         ):
             try:
@@ -1156,6 +1250,9 @@ class MenstrualCyclePlugin(Star):
             except (TypeError, ValueError):
                 continue
             setattr(settings, field_name, max(low, min(high, value)))
+        preset = str(self._cfg("default_constitution", settings.constitution) or "").lower()
+        if preset in CONSTITUTIONS:
+            settings.constitution = preset
 
     def _seed_default_cycle(self, profile: UserProfile) -> None:
         """第一次运行时她已经在周期中间了，不该从「今天第 1 天」突然开始。
@@ -1190,9 +1287,62 @@ class MenstrualCyclePlugin(Star):
         value = str(self._cfg("cycle_scope", CHARACTER_SCOPE) or "").strip().lower()
         return value if value in (CHARACTER_SCOPE, USER_SCOPE) else CHARACTER_SCOPE
 
-    def _user_key(self, event: AstrMessageEvent) -> str:
+    async def _character_key(self, event: AstrMessageEvent | None = None) -> str:
+        """她这条身体的档案键。
+
+        默认所有会话共用同一条（跟谁聊都是同一个她）；也可以按 bot 或人格分开——
+        同一个 AstrBot 挂了多个账号/多个人格时，各自的周期不该互相串。
+        """
+        mode = str(self._cfg("character_scope_key", "single") or "single").strip().lower()
+        if mode == "bot" and event is not None:
+            self_id = ""
+            platform = ""
+            with contextlib.suppress(Exception):
+                self_id = str(getattr(event, "self_id", "") or "")
+            with contextlib.suppress(Exception):
+                platform = event.get_platform_id() or ""
+            if self_id:
+                return f"character:{platform}:{self_id}" if platform else f"character:{self_id}"
+        elif mode == "persona" and event is not None:
+            persona = await self._persona_key(event)
+            if persona:
+                return f"character:persona:{persona}"
+        return CHARACTER_KEY
+
+    async def _persona_key(self, event: AstrMessageEvent) -> str:
+        """当前会话用的是哪个人格。拿不到就返回空，退回共用一条。"""
+        manager = getattr(self.context, "persona_manager", None)
+        if manager is None:
+            return ""
+        umo = getattr(event, "unified_msg_origin", "") or ""
+        for name in ("get_default_persona_v3", "get_default_persona", "get_persona"):
+            getter = getattr(manager, name, None)
+            if not callable(getter):
+                continue
+            try:
+                result = getter(umo=umo)
+                if inspect.isawaitable(result):
+                    result = await result
+            except TypeError:
+                try:
+                    result = getter(umo)
+                    if inspect.isawaitable(result):
+                        result = await result
+                except Exception:
+                    continue
+            except Exception:
+                continue
+            if isinstance(result, dict):
+                label = result.get("name") or result.get("persona_id") or ""
+            else:
+                label = getattr(result, "name", "") or ""
+            if label:
+                return str(label)[:40]
+        return ""
+
+    async def _user_key(self, event: AstrMessageEvent) -> str:
         if self._scope() == CHARACTER_SCOPE:
-            return CHARACTER_KEY
+            return await self._character_key(event)
         platform = ""
         sender = ""
         with contextlib.suppress(Exception):

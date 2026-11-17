@@ -18,10 +18,12 @@ from . import text as tt
 from .engine import (
     compute_state,
     cycle_stats,
+    phase_baseline,
     predict_next_periods,
     pretty_date,
 )
 from .models import (
+    CONSTITUTIONS,
     DT_FMT,
     VECTOR_FIELDS,
     PeriodRecord,
@@ -178,6 +180,9 @@ def settings_payload(profile: UserProfile) -> dict[str, Any]:
         "reminder": bool(settings.reminder),
         "reminder_style": settings.reminder_style,
         "paused_until": settings.paused_until,
+        "constitution": settings.constitution,
+        "phase_learning": bool(settings.phase_learning),
+        "phase_weight": _round(settings.phase_weight, 2),
     }
 
 
@@ -204,6 +209,8 @@ class DashboardAPI:
             # 下面两条把 user_key 放进 query/body，避免路径里的冒号被网关吃掉
             (f"{base}/detail", self.detail_query, ["GET"], "单个用户详情（query 版）"),
             (f"{base}/action", self.action, ["POST"], "统一写操作（body 版）"),
+            (f"{base}/export", self.export_user, ["GET"], "导出一个档案"),
+            (f"{base}/import", self.import_user, ["POST"], "导入一个档案"),
         ]
 
     def register(self) -> bool:
@@ -252,21 +259,86 @@ class DashboardAPI:
     # ------------------------------------------------------------------
     # GET /detail?key=...
     # ------------------------------------------------------------------
+    def _query_key(self) -> str:
+        """从 query 里取 key。不同版本的 request 代理字段不完全一样，都试一遍。"""
+        query = getattr(web_request, "query", None) if web_request is not None else None
+        if query is None:
+            return ""
+        getter = getattr(query, "get", None)
+        if not callable(getter):
+            return ""
+        try:
+            return str(getter("key", "") or "")
+        except Exception:
+            return ""
+
     async def detail_query(self) -> Any:
         """和老路由等价，但 user_key 走 query，躲开路径编码。"""
         try:
-            key = ""
-            query = getattr(web_request, "query", None) if web_request is not None else None
-            if query is not None:
-                getter = getattr(query, "get", None)
-                if callable(getter):
-                    key = str(getter("key", "") or "")
+            key = self._query_key()
             if not key:
                 return self._fail("缺少 key")
             return await self.user_detail(key)
         except Exception as exc:
             self._log().exception("[menstrual] detail 出错")
             return self._fail(f"读取失败：{exc}", status_code=500)
+
+    async def export_user(self) -> Any:
+        """整份档案导成 JSON：换机器、备份、或者拿去改都能用。"""
+        try:
+            key = self._query_key()
+            if not key:
+                return self._fail("缺少 key")
+            profile = await self._profile(key)
+            if profile is None:
+                return self._fail("没有这个用户", status_code=404)
+            return self._ok(
+                {
+                    "format": PLUGIN_NAME,
+                    "version": getattr(self.plugin, "version", "") or "",
+                    "exported_at": _now_stamp(),
+                    "profile": profile.as_dict(),
+                }
+            )
+        except Exception as exc:
+            self._log().exception("[menstrual] export 出错")
+            return self._fail(f"导出失败：{exc}", status_code=500)
+
+    async def import_user(self) -> Any:
+        """把导出的 JSON 灌回去，覆盖同 key 的档案。"""
+        try:
+            body = await self._body()
+            key = str(body.get("key") or "").strip()
+            if not key:
+                return self._fail("缺少 key")
+            data = body.get("data")
+            if isinstance(data, dict) and isinstance(data.get("profile"), dict):
+                data = data["profile"]
+            if not isinstance(data, dict):
+                return self._fail("要导入的数据格式不对：应该选择导出的那份 JSON")
+            payload = dict(data)
+            payload["user_key"] = key
+            profile = UserProfile.from_dict(payload)
+            profile.trim_pain_logs()
+            profile.updated_at = _now_stamp()
+            await self._store().upsert(profile)
+            with contextlib.suppress(Exception):
+                self.plugin.voice.invalidate(profile)
+            with contextlib.suppress(Exception):
+                await self.plugin._auto_sync(profile, compute_state(profile))
+            return self._ok(
+                {
+                    "ok": True,
+                    "message": (
+                        f"已导入 {len(profile.periods)} 条记录、"
+                        f"{len(profile.pain_logs)} 天疼痛记录"
+                    ),
+                    "detail": await self._detail_payload(profile),
+                }
+            )
+        except Exception as exc:
+            self._log().exception("[menstrual] import 出错")
+            return self._fail(f"导入失败：{exc}", status_code=500)
 
     # ------------------------------------------------------------------
     # POST /action  {"key": ..., "op": "record|state|settings|voice|reset"}
@@ -379,6 +451,7 @@ class DashboardAPI:
                     },
                     "stats": stats_total,
                     "platforms": self._platforms(),
+                    "perf": self._perf_payload(),
                     "users": users,
                 }
             )
@@ -638,7 +711,14 @@ class DashboardAPI:
                         return self._fail("疼痛应该在 0～10 之间")
                     profile.pain_logs[key] = round(level / 10, 4)
                     profile.trim_pain_logs()
-                    changes.append(f"今天的疼痛记成 {level:g}/10")
+                    state = compute_state(profile, today)
+                    if state is not None:
+                        profile.remember_phase_pain(state.phase.key, level / 10.0)
+                        changes.append(
+                            f"今天的疼痛记成 {level:g}/10（{state.phase.name}样本 +1）"
+                        )
+                    else:
+                        changes.append(f"今天的疼痛记成 {level:g}/10")
 
             if "comfort" in body:
                 kind = str(body.get("comfort") or "").strip().lower()
@@ -831,6 +911,28 @@ class DashboardAPI:
                         return self._fail("观察期要填日期（YYYY-MM-DD）")
                     settings.paused_until = day.isoformat()
                     changes.append(f"观察期到：{pretty_date(day)}")
+
+            if "constitution" in body:
+                preset = str(body.get("constitution") or "").strip().lower()
+                if preset not in CONSTITUTIONS:
+                    return self._fail("体质只能是普通 / 敏感型 / 经期重 / 轻")
+                settings.constitution = preset
+                changes.append(f"体质：{CONSTITUTIONS[preset]['label']}")
+
+            if "phase_learning" in body:
+                settings.phase_learning = bool(body.get("phase_learning"))
+                changes.append(f"按她的自报校准：{'开' if settings.phase_learning else '关'}")
+
+            if "phase_weight" in body:
+                raw = body.get("phase_weight")
+                try:
+                    number = float(raw)
+                except (TypeError, ValueError):
+                    return self._fail("校准权重要填数字")
+                if not 0.0 <= number <= 0.8:
+                    return self._fail("校准权重应该在 0～0.8 之间")
+                settings.phase_weight = round(number, 2)
+                changes.append(f"校准权重：{settings.phase_weight:g}")
 
             profile.updated_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             await self._store().upsert(profile)
@@ -1025,6 +1127,11 @@ class DashboardAPI:
                 {"kind": item.kind, "label": item.label, "hours": item.hours}
                 for item in cm.RULES
             ],
+            "constitution_options": [
+                {"key": key, "label": item["label"], "hint": item["hint"]}
+                for key, item in CONSTITUTIONS.items()
+            ],
+            "learned": self._learned(profile),
             "voice": {
                 "mode": self._voice_mode(),
                 "status": self.plugin.voice.status_text(profile, state),
@@ -1035,7 +1142,91 @@ class DashboardAPI:
                 "fields": list(VECTOR_FIELDS),
             },
             "trend": self._trend(profile, today),
+            "calendar": self._calendar(profile, today),
             "injection": self._injection_text(profile, state),
+        }
+
+    def _learned(self, profile: UserProfile) -> dict[str, Any]:
+        """她每个阶段自己报过的疼痛：够不够用来校准、现在校准到多少。"""
+        phases: dict[str, Any] = {}
+        for key in ("menstrual", "follicular", "ovulation", "luteal", "pms"):
+            values = profile.phase_pain.get(key) or []
+            baseline = phase_baseline(profile, key)
+            phases[key] = {
+                "samples": len(values),
+                "median": _round(baseline) if baseline is not None else None,
+                "active": baseline is not None,
+            }
+        return {
+            "enabled": bool(profile.settings.phase_learning),
+            "weight": _round(profile.settings.phase_weight, 2),
+            "phases": phases,
+        }
+
+    def _calendar(
+        self, profile: UserProfile, today: date, back: int = 45, ahead: int = 60
+    ) -> list[dict[str, Any]]:
+        """按天给她在日历上的样子：真经期、预测经期、当天有没有自报疼痛。"""
+        records = profile.sorted_periods()
+        if not records:
+            return []
+        span = max(2, min(12, profile.settings.period_length))
+        actual: list[tuple[date, date]] = []
+        for item in records:
+            end = item.end or min(today, item.start + timedelta(days=span - 1))
+            actual.append((item.start, max(item.start, end)))
+        future = [
+            (begin, end) for begin, end in predict_next_periods(profile, 4) if begin > today
+        ]
+        out: list[dict[str, Any]] = []
+        for offset in range(-back, ahead + 1):
+            day = today + timedelta(days=offset)
+            kind = "none"
+            for begin, end in actual:
+                if begin <= day <= end:
+                    kind = "period"
+                    break
+            if kind == "none":
+                for begin, end in future:
+                    if begin <= day <= end:
+                        kind = "predicted"
+                        break
+            logged = profile.pain_logs.get(day.isoformat())
+            out.append(
+                {
+                    "date": _iso(day),
+                    "kind": kind,
+                    "pain": _round(float(logged)) if logged is not None else None,
+                    "today": day == today,
+                }
+            )
+        return out
+
+    def _perf_payload(self) -> dict[str, Any]:
+        """插件自己花的时间：注入了几次、多慢、各档位用得多不多。"""
+        perf = getattr(self.plugin, "_perf", None) or {}
+        recent = [
+            float(value)
+            for value in (perf.get("recent") or [])
+            if isinstance(value, (int, float))
+        ]
+        levels = dict(perf.get("levels") or {})
+        base = {"count": int(perf.get("count") or 0), "levels": levels}
+        if not recent:
+            return {**base, "avg": None, "p50": None, "p95": None, "last": None, "recent": []}
+        ordered = sorted(recent)
+
+        def pick(ratio: float) -> float:
+            index = int(round(ratio * (len(ordered) - 1)))
+            return ordered[max(0, min(len(ordered) - 1, index))]
+
+        return {
+            **base,
+            "avg": _round(sum(recent) / len(recent), 2),
+            "p50": _round(pick(0.5), 2),
+            "p95": _round(pick(0.95), 2),
+            "last": _round(recent[-1], 2),
+            "recent": [_round(value, 2) for value in recent[-30:]],
         }
 
     def _trend(

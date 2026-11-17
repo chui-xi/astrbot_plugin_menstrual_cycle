@@ -12,6 +12,45 @@ from typing import Any
 ISO_FMT = "%Y-%m-%d"
 DT_FMT = "%Y-%m-%dT%H:%M:%S"
 PAIN_LOG_LIMIT = 1200
+PHASE_PAIN_LIMIT = 12
+DEFAULT_CONSTITUTION = "balanced"
+
+# 体质预设：同一条周期曲线，落在不同身体上应该不一样。
+# pain 乘在疼痛上，emotion 乘情绪幅度，energy 乘精力，sensitive 是加减在情绪敏感度上。
+CONSTITUTIONS: dict[str, dict[str, Any]] = {
+    "balanced": {
+        "label": "普通",
+        "hint": "不额外加减，按周期曲线走",
+        "pain": 1.0,
+        "emotion": 1.0,
+        "energy": 1.0,
+        "sensitive": 0.0,
+    },
+    "sensitive": {
+        "label": "敏感型",
+        "hint": "疼得更明显，情绪起伏也更大",
+        "pain": 1.22,
+        "emotion": 1.12,
+        "energy": 0.96,
+        "sensitive": 0.08,
+    },
+    "heavy": {
+        "label": "经期重",
+        "hint": "经期和 PMS 明显更难受，人也没力气",
+        "pain": 1.45,
+        "emotion": 1.0,
+        "energy": 0.88,
+        "sensitive": 0.04,
+    },
+    "light": {
+        "label": "轻",
+        "hint": "来的时候不太影响生活",
+        "pain": 0.78,
+        "emotion": 0.94,
+        "energy": 1.05,
+        "sensitive": -0.04,
+    },
+}
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -223,6 +262,9 @@ class UserSettings:
     reminder: bool = True
     reminder_style: str = "in_character"
     paused_until: str = ""
+    constitution: str = DEFAULT_CONSTITUTION
+    phase_learning: bool = True
+    phase_weight: float = 0.3
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -234,6 +276,9 @@ class UserSettings:
             "reminder": self.reminder,
             "reminder_style": self.reminder_style,
             "paused_until": self.paused_until,
+            "constitution": self.constitution,
+            "phase_learning": self.phase_learning,
+            "phase_weight": self.phase_weight,
         }
 
     @classmethod
@@ -242,6 +287,13 @@ class UserSettings:
         style = str(payload.get("reminder_style") or "in_character").lower()
         if style not in ("in_character", "reminder"):
             style = "in_character"
+        constitution = str(payload.get("constitution") or DEFAULT_CONSTITUTION).lower()
+        if constitution not in CONSTITUTIONS:
+            constitution = DEFAULT_CONSTITUTION
+        try:
+            phase_weight = float(payload.get("phase_weight", 0.3))
+        except (TypeError, ValueError):
+            phase_weight = 0.3
         return cls(
             cycle_length=int(payload.get("cycle_length") or 28),
             period_length=int(payload.get("period_length") or 5),
@@ -251,6 +303,9 @@ class UserSettings:
             reminder=bool(payload.get("reminder", True)),
             reminder_style=style,
             paused_until=str(payload.get("paused_until") or ""),
+            constitution=constitution,
+            phase_learning=bool(payload.get("phase_learning", True)),
+            phase_weight=clamp(phase_weight, 0.0, 0.8),
         )
 
 
@@ -294,6 +349,7 @@ class UserProfile:
     periods: list[PeriodRecord] = field(default_factory=list)
     comforts: list[Comfort] = field(default_factory=list)
     pain_logs: dict[str, float] = field(default_factory=dict)
+    phase_pain: dict[str, list[float]] = field(default_factory=dict)
     overrides: dict[str, float] = field(default_factory=dict)
     override_until: str = ""
     updated_at: str = ""
@@ -332,6 +388,21 @@ class UserProfile:
         for key in sorted(self.pain_logs)[: len(self.pain_logs) - limit]:
             self.pain_logs.pop(key, None)
 
+    def remember_phase_pain(
+        self, phase_key: str, value: float, limit: int = PHASE_PAIN_LIMIT
+    ) -> None:
+        """记下「这个阶段她一般疼多少」，用于慢慢校准曲线。
+
+        只保留最近 limit 次：身体会变（减重、用药、生完孩子），
+        太老的样本不该继续拉平均值。
+        """
+        if not phase_key:
+            return
+        bucket = self.phase_pain.setdefault(phase_key, [])
+        bucket.append(clamp(float(value)))
+        if limit > 0 and len(bucket) > limit:
+            del bucket[: len(bucket) - limit]
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "user_key": self.user_key,
@@ -343,6 +414,7 @@ class UserProfile:
             "periods": [record.as_dict() for record in self.sorted_periods()],
             "comforts": [item.as_dict() for item in self.comforts[-12:]],
             "pain_logs": dict(self.pain_logs),
+            "phase_pain": {key: list(values) for key, values in self.phase_pain.items()},
             "overrides": dict(self.overrides),
             "override_until": self.override_until,
             "updated_at": self.updated_at,
@@ -358,6 +430,20 @@ class UserProfile:
                     pain_logs[str(key)] = clamp(float(value))
                 except (TypeError, ValueError):
                     continue
+        raw_phase = payload.get("phase_pain") or {}
+        phase_pain: dict[str, list[float]] = {}
+        if isinstance(raw_phase, dict):
+            for key, values in raw_phase.items():
+                if not isinstance(values, list):
+                    continue
+                cleaned = []
+                for value in values:
+                    try:
+                        cleaned.append(clamp(float(value)))
+                    except (TypeError, ValueError):
+                        continue
+                if cleaned:
+                    phase_pain[str(key)] = cleaned[-PHASE_PAIN_LIMIT:]
         return cls(
             user_key=str(payload.get("user_key") or ""),
             nickname=str(payload.get("nickname") or ""),
@@ -370,6 +456,7 @@ class UserProfile:
                 Comfort.from_dict(item) for item in payload.get("comforts") or []
             ][-12:],
             pain_logs=pain_logs,
+            phase_pain=phase_pain,
             overrides=_clean_overrides(payload.get("overrides")),
             override_until=str(payload.get("override_until") or ""),
             updated_at=str(payload.get("updated_at") or ""),

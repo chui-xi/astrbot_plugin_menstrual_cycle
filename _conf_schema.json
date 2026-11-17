@@ -59,6 +59,22 @@
     ],
     "hint": "character：她独立拥有生理周期，聊天时自然带入，不记录对方是谁，也不需要谁来记；user：每个人分别建档、分别推算。"
   },
+  "character_scope_key": {
+    "type": "string",
+    "description": "周期归谁时，按什么分开",
+    "default": "single",
+    "options": [
+      "single",
+      "bot",
+      "persona"
+    ],
+    "labels": [
+      "全部共用一个身体",
+      "一个 bot 一个身体",
+      "一个人格一个身体"
+    ],
+    "hint": "默认全部共用一个身体。挂了多个 bot 号、或者一个人格一个性格时，可以按 bot 或按人格分开，各自有各自的周期。"
+  },
   "character_name": {
     "description": "她叫什么",
     "type": "string",
@@ -226,6 +242,24 @@
     },
     "hint": "1.0 是标准，0 等于没有经前期。"
   },
+  "default_constitution": {
+    "type": "string",
+    "description": "新建档案时的默认体质",
+    "hint": "普通 / 敏感型 / 经期重 / 轻。只影响新建的档案，之后可以在面板里各自改。",
+    "default": "balanced",
+    "options": [
+      "balanced",
+      "sensitive",
+      "heavy",
+      "light"
+    ],
+    "labels": [
+      "普通",
+      "敏感型",
+      "经期重",
+      "轻"
+    ]
+  },
   "remember_session": {
     "description": "记住最近会话用于主动提醒",
     "type": "bool",
@@ -267,6 +301,12 @@
     "description": "在 AstrBot 面板里显示「生理周期 · 控制台」页面（可看周期、改记录与设置、重写文案）",
     "hint": "关掉只是隐藏面板入口，不影响聊天里的功能",
     "default": true
+  },
+  "enable_llm_tool": {
+    "type": "bool",
+    "description": "允许模型调用 period_cycle 工具",
+    "default": true,
+    "hint": "开着时模型可以自己查周期、记开始结束、报疼痛；关掉后它只用系统提示里的状态卡，也不会替用户改数据。"
   },
   "enable_admin_only": {
     "description": "只有管理员能动指令",

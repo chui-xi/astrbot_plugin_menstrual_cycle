@@ -15,6 +15,7 @@ from .engine import (
     phase_progress_text,
     predict_next_periods,
     pretty_date,
+    recent_states,
 )
 from .models import (
     EmotionVector,
@@ -266,6 +267,91 @@ def render_help(prefix: str = "") -> str:
 # 注入给模型的状态卡
 # ---------------------------------------------------------------------------
 
+# 短句（"嗯""哈哈"）不该被一整张状态卡淹没；但一问到身体就得给足信息
+_QUESTION_WORDS = ("?", "？", "吗", "呢", "怎么样", "多少", "几号", "几天", "是不是")
+_BODY_WORDS = (
+    "疼",
+    "痛",
+    "累",
+    "困",
+    "身体",
+    "心情",
+    "舒服",
+    "难受",
+    "月经",
+    "例假",
+    "生理期",
+    "周期",
+)
+
+_RULE_QUIET = (
+    "- 平时不主动播报：不要提状态卡、周期天数、激素、插件，也不要张口就报数值，"
+    "更不要无缘无故宣布「我来例假了」。"
+)
+_RULE_MENTION = (
+    "- 但他问你在干嘛、今天怎么样、怎么没精神、是不是不舒服时，可以顺口提一句这两天身体不太舒服"
+    "——这是你自己愿意说的，不是被问出来的报告。"
+)
+_RULE_TRUTH = (
+    "- 但对方直接问你身体、心情、疼不疼、还有几天这类事时，必须按上面的状态如实回答，"
+    "不能比自己真实的状态更好。疼就说疼，没力气就说没力气，别用「挺好的」盖过去，"
+    "也不要只说「有点困」就带过。"
+)
+_RULE_NEVER_ASK = (
+    "- 不要主动说“你是不是来例假了”“是不是生理期”，也不要因为情绪起伏就解释自己的设定。"
+)
+_RULE_BACKGROUND = "- 情绪是背景，不是台词：该说事就说事，只是更软、更短、更少讲道理。"
+_RULE_HISTORY = "- 这些是已经发生过的事，可以自然带一句「这两天都不太舒服」，但不要像念记录。"
+
+
+def injection_level(message: str) -> str:
+    """按这句话的轻重决定注入多少：brief / normal / full。"""
+    text = (message or "").strip()
+    if not text:
+        return "brief"
+    # 短句（哪怕带问号，比如"在吗"）只要没提到身体，就不值得铺一整张卡
+    if len(text) <= 6 and not any(word in text for word in _BODY_WORDS):
+        return "brief"
+    if (
+        len(text) > 20
+        or any(word in text for word in _QUESTION_WORDS)
+        or any(word in text for word in _BODY_WORDS)
+    ):
+        return "full"
+    return "normal"
+
+
+def _fit(text: str, max_chars: int) -> str:
+    if max_chars and len(text) > max_chars:
+        return text[: max_chars - 1].rstrip() + "…"
+    return text
+
+
+def _history_line(
+    profile: UserProfile,
+    today: date,
+    days: int,
+    include_numbers: bool,
+) -> str:
+    """把昨天、前天她的状态压成一行，让她能说出「这两天」。"""
+    items: list[str] = []
+    for day, old in recent_states(profile, days, today):
+        label = {1: "昨天", 2: "前天"}.get((today - day).days, pretty_date(day))
+        bits = [f"{label} 第 {old.cycle_day} 天", old.phase.name]
+        if include_numbers:
+            if old.pain_logged is not None:
+                bits.append(f"疼 {old.pain_logged:.2f}（她自己报的）")
+            else:
+                bits.append(f"疼 {old.vector.pain:.2f}")
+        else:
+            bits.append("不太舒服" if old.vector.pain >= 0.4 else "还行")
+        if old.comforts:
+            bits.append("被哄过一次")
+        items.append(" · ".join(bits))
+    if not items:
+        return ""
+    return "最近几天（从近到远）：" + "；".join(items)
+
 
 def build_injection(
     profile: UserProfile,
@@ -274,7 +360,18 @@ def build_injection(
     max_chars: int = 900,
     include_numbers: bool = True,
     voice: object | None = None,
+    detail: str = "full",
+    self_mention: bool = True,
+    history_days: int = 2,
+    today: date | None = None,
 ) -> str:
+    """把她的状态写成给模型看的状态卡。
+
+    ``detail`` 决定信息量：``brief``（短句）只给一行身体和一条规则，
+    ``normal`` 给数值与三条规则，``full`` 是完整版（历史 + 三条倾向 + 全部规则）。
+    """
+    level = detail if detail in ("brief", "normal", "full") else "full"
+    moment = today or date.today()
     vec = state.vector
     who = profile.nickname or "对方"
     written = _voice_phase(voice, state.phase.key)
@@ -287,6 +384,32 @@ def build_injection(
         3,
         seed,
     )
+
+    if level == "brief":
+        # 短句最容易得到敷衍的回复，所以这一档只保留最要紧的两件事：
+        # 今天什么状态，以及「被问就必须说实话」。
+        if state.paused or state.irregular:
+            day_line = (
+                f"她（{who}）这几天周期不太准，状态大致相当于第 {state.cycle_day} 天，"
+                f"阶段：{phase_name}。"
+            )
+        else:
+            day_line = f"她（{who}）今天第 {state.cycle_day} 天，阶段：{phase_name}。"
+        pain = f"疼痛 {vec.pain:.2f}/1。" if include_numbers else ""
+        return _fit(
+            "\n".join(
+                [
+                    "【生理周期 · 内部状态卡】",
+                    day_line,
+                    f"身体：{body}。{pain}".rstrip(),
+                    f"表达要求：{state.phase.tone}。",
+                    "规则：对方直接问你身体、心情时按上面的状态如实说，别比自己真实的状态更好；"
+                    "不提状态卡、周期天数、插件和数值。",
+                ]
+            ),
+            max_chars,
+        )
+
 
     if state.paused:
         head = (
@@ -302,48 +425,62 @@ def build_injection(
         )
 
     if include_numbers:
-        detail = (
+        mood_bits = f"愉悦 {vec.valence:+.2f}/1，压力 {vec.stress:.2f}/1"
+        if level == "full":
+            mood_bits += (
+                f"，情绪敏感 {vec.sensitive:.2f}/1，社交欲 {vec.social:.2f}/1"
+            )
+        detail_line = (
             f"身体：{body}。精力 {vec.energy:.2f}/1，疼痛 {vec.pain:.2f}/1"
             + ("（她自己报的）" if state.pain_logged is not None else "")
-            + "。\n"
-            f"情绪：{mood_word}——愉悦 {vec.valence:+.2f}/1，压力 {vec.stress:.2f}/1，"
-            f"情绪敏感 {vec.sensitive:.2f}/1，社交欲 {vec.social:.2f}/1。"
+            + f"。\n情绪：{mood_word}——{mood_bits}。"
         )
     else:
-        detail = f"身体：{body}。\n情绪：{mood_word}。"
+        detail_line = f"身体：{body}。\n情绪：{mood_word}。"
 
-    blocks = [head, detail]
+    blocks = [head, detail_line]
 
     if state.comforts:
         names = comfort_mod.summarize(state.comforts)
-        feeling = comfort_mod.reward_text(state.comforts)
-        line = f"刚发生过：{names}。"
-        if feeling:
-            line += f"你现在{feeling}，比刚才松了一截，也更愿意让他靠近。"
+        if level == "full":
+            feeling = comfort_mod.reward_text(state.comforts)
+            line = f"刚发生过：{names}。"
+            if feeling:
+                line += f"你现在{feeling}，比刚才松了一截，也更愿意让他靠近。"
+            else:
+                line += "你被照顾到了，气顺了一些，也更愿意让他靠近。"
         else:
-            line += "你被照顾到了，气顺了一些，也更愿意让他靠近。"
+            line = f"刚发生过：{names}。"
         blocks.append(line)
 
-    blocks.append("此刻的倾向：\n" + "\n".join(f"- {beat}" for beat in beats))
+    if level == "full" and history_days > 0:
+        history = _history_line(profile, moment, history_days, include_numbers)
+        if history:
+            blocks.append(history)
+
+    if level == "full":
+        blocks.append("此刻的倾向：\n" + "\n".join(f"- {beat}" for beat in beats))
+    else:
+        blocks.append("此刻的倾向：\n- " + beats[0])
+
     blocks.append(f"表达要求：{state.phase.tone}。")
 
-    rules = [
-        "硬性规则：",
-        "- 平时不主动播报：不要提状态卡、周期天数、激素、插件，也不要张口就报数值。",
-        "- 但对方直接问你身体、心情、疼不疼、还有几天这类事时，必须按上面的状态如实回答，不能比自己真实的状态更好。疼就说疼，没力气就说没力气，别用「挺好的」盖过去，也不要只说「有点困」就带过。",
-        "- 不要主动说“你是不是来例假了”“是不是生理期”，也不要因为情绪起伏就解释自己的设定。",
-        "- 情绪是背景，不是台词：该说事就说事，只是更软、更短、更少讲道理。",
-    ]
+    rules = ["硬性规则：", _RULE_QUIET]
+    if self_mention:
+        rules.append(_RULE_MENTION)
+    rules.append(_RULE_TRUTH)
+    rules.append(_RULE_NEVER_ASK)
+    if level == "full":
+        rules.append(_RULE_BACKGROUND)
     if state.irregular or state.paused:
         rules.append("- 她最近的周期本身就不准，不要用「还有几天」这种精确说法。")
     if state.comforts:
         rules.append("- 他刚照顾过你：别反复追问「好点没」，也别拿这件事讨功或索取回报。")
+    if level == "full" and history_days > 0:
+        rules.append(_RULE_HISTORY)
     blocks.append("\n".join(rules))
 
-    text = "\n".join(blocks)
-    if len(text) > max_chars:
-        text = text[: max_chars - 1].rstrip() + "…"
-    return text
+    return _fit("\n".join(blocks), max_chars)
 
 
 def selflearn_snapshot(profile: UserProfile, state: PhaseState) -> dict[str, object]:

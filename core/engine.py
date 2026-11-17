@@ -31,6 +31,11 @@ from .models import (
 # 参考周期固定为 28 天，所有关键帧都写在这条轴上
 REFERENCE_CYCLE = 28.0
 
+# 相邻两次开始日落在什么区间才算「一次周期」：
+# 上界放到 90 天，多囊一类长周期不会被当成漏记丢掉
+MIN_CYCLE_DAYS = 15
+MAX_CYCLE_DAYS = 90
+
 # (28 天等效日, 情绪向量)
 _KEYFRAMES: tuple[tuple[float, EmotionVector], ...] = (
     (1.0, EmotionVector(-0.50, 0.30, 0.22, 0.65, 0.80, 0.75, 0.12, 0.30)),
@@ -80,7 +85,7 @@ def _resolve_cycle_length(profile: UserProfile) -> tuple[int, bool]:
     diffs = [
         (later - earlier).days
         for earlier, later in zip(starts, starts[1:])
-        if 15 <= (later - earlier).days <= 60
+        if MIN_CYCLE_DAYS <= (later - earlier).days <= MAX_CYCLE_DAYS
     ]
     if not diffs:
         return max(20, min(45, settings.cycle_length)), False
@@ -105,7 +110,7 @@ def cycle_variability(profile: UserProfile) -> tuple[float, bool]:
     diffs = [
         (later - earlier).days
         for earlier, later in zip(starts, starts[1:])
-        if 15 <= (later - earlier).days <= 60
+        if MIN_CYCLE_DAYS <= (later - earlier).days <= MAX_CYCLE_DAYS
     ]
     if len(diffs) < 3:
         return 0.0, False
@@ -356,6 +361,25 @@ def compute_state(
     )
 
 
+def recent_states(
+    profile: UserProfile, days: int = 2, today: date | None = None
+) -> list[tuple[date, PhaseState]]:
+    """回看最近几天（不含今天）的状态，给她一段「这几天」的记忆。
+
+    回看一律忽略管理员钉住的数值：那是「从现在起几小时」，不该把昨天也改写。
+    """
+    if days <= 0:
+        return []
+    base = today or date.today()
+    out: list[tuple[date, PhaseState]] = []
+    for offset in range(1, days + 1):
+        day = base - timedelta(days=offset)
+        state = compute_state(profile, day, ignore_overrides=True)
+        if state is not None:
+            out.append((day, state))
+    return out
+
+
 def predict_next_periods(profile: UserProfile, count: int = 3) -> list[tuple[date, date]]:
     """预测未来若干次经期区间 (开始, 结束)。"""
     periods = profile.sorted_periods()
@@ -378,7 +402,7 @@ def cycle_stats(profile: UserProfile) -> dict[str, float | int | None]:
     diffs = [
         (later - earlier).days
         for earlier, later in zip(starts, starts[1:])
-        if 15 <= (later - earlier).days <= 60
+        if MIN_CYCLE_DAYS <= (later - earlier).days <= MAX_CYCLE_DAYS
     ]
     cycle_length, from_history = _resolve_cycle_length(profile)
     period_length = _resolve_period_length(profile, profile.settings.period_length)

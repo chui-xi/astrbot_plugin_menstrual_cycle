@@ -45,7 +45,7 @@ except Exception:  # pragma: no cover - 仅老版本走到
 
 # 面板能改的设置项 -> (最小, 最大, 取整)
 NUMERIC_SETTINGS: dict[str, tuple[float, float, bool]] = {
-    "cycle_length": (15, 60, True),
+    "cycle_length": (15, 90, True),
     "period_length": (1, 12, True),
     "pain_sensitivity": (0.2, 2.5, False),
     "emotion_gain": (0.2, 2.5, False),
@@ -637,9 +637,7 @@ class DashboardAPI:
                     if not 0 <= level <= 10:
                         return self._fail("疼痛应该在 0～10 之间")
                     profile.pain_logs[key] = round(level / 10, 4)
-                    if len(profile.pain_logs) > 240:
-                        for old in sorted(profile.pain_logs)[:-240]:
-                            profile.pain_logs.pop(old, None)
+                    profile.trim_pain_logs()
                     changes.append(f"今天的疼痛记成 {level:g}/10")
 
             if "comfort" in body:

@@ -22,6 +22,29 @@
     "default": true,
     "hint": "数值帮助模型把握程度（比如压力 0.63 比“有点烦”更精确）；不想要数字就关掉，只保留自然语言描述。"
   },
+  "enable_injection_levels": {
+    "description": "按消息长短决定注入多少",
+    "type": "bool",
+    "default": true,
+    "hint": "短句（嗯、哈哈、在吗）只注入一小段；问到身体、心情或话题更长时给完整状态卡。关掉就永远注入完整版，更费 token。"
+  },
+  "injection_history_days": {
+    "description": "注入里带上最近几天",
+    "type": "int",
+    "default": 2,
+    "slider": {
+      "min": 0,
+      "max": 5,
+      "step": 1
+    },
+    "hint": "让她知道昨天、前天什么状况，才能说出「这两天都不太舒服」。0 = 不提过去。"
+  },
+  "allow_self_mention": {
+    "description": "允许她顺口提一句身体不舒服",
+    "type": "bool",
+    "default": true,
+    "hint": "只在他问起「在干嘛」「怎么没精神」这类时候才允许，不会无缘无故宣布来例假。"
+  },
   "cycle_scope": {
     "description": "周期归谁",
     "type": "string",

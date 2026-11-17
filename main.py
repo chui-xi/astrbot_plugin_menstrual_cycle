@@ -125,7 +125,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.7.3"
+    version = "1.8.0"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
@@ -308,12 +308,21 @@ class MenstrualCyclePlugin(Star):
                 voice = self.voice.cached(profile, state)
                 if voice is None:
                     self.voice.schedule(profile, state)
+            message = getattr(event, "message_str", "") or ""
+            level = (
+                tt.injection_level(message)
+                if self._cfg("enable_injection_levels", True)
+                else "full"
+            )
             block = tt.build_injection(
                 profile,
                 state,
                 max_chars=int(self._cfg("injection_max_chars", 900)),
                 include_numbers=bool(self._cfg("injection_numbers", True)),
                 voice=voice,
+                detail=level,
+                self_mention=bool(self._cfg("allow_self_mention", True)),
+                history_days=int(self._cfg("injection_history_days", 2) or 0),
             )
             base = getattr(req, "system_prompt", "") or ""
             req.system_prompt = f"{base}\n\n{block}" if base else block
@@ -414,6 +423,7 @@ class MenstrualCyclePlugin(Star):
             if not 0 <= level <= 10:
                 return "疼痛程度要落在 0-10 之间。"
             profile.pain_logs[date.today().isoformat()] = clamp(level / 10.0)
+            profile.trim_pain_logs()
             await self.store.upsert(profile)
             state = compute_state(profile)
             return state.summary_line() if state else "已记录。"
@@ -629,9 +639,7 @@ class MenstrualCyclePlugin(Star):
                 yield event.plain_result("0 到 10 之间，10 是疼到动不了。")
                 return
             profile.pain_logs[key] = clamp(level / 10.0)
-            if len(profile.pain_logs) > 240:
-                for old_key in sorted(profile.pain_logs)[: len(profile.pain_logs) - 240]:
-                    profile.pain_logs.pop(old_key, None)
+            profile.trim_pain_logs()
             await self.store.upsert(profile)
             state = compute_state(profile)
             body = tt.render_status(profile, state) if state else ""

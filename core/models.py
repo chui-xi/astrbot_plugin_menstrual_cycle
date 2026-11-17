@@ -11,6 +11,7 @@ from typing import Any
 
 ISO_FMT = "%Y-%m-%d"
 DT_FMT = "%Y-%m-%dT%H:%M:%S"
+PAIN_LOG_LIMIT = 1200
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -319,6 +320,17 @@ class UserProfile:
         if until is not None and until <= (now or datetime.now()):
             return {}
         return dict(self.overrides)
+
+    def trim_pain_logs(self, limit: int = PAIN_LOG_LIMIT) -> None:
+        """只留最近 limit 天的自报疼痛，避免档案无限变大。
+
+        默认 1200 天（三年多）：太短会在长期使用后丢掉趋势，
+        又不想引入月度聚合键——那会让面板和 engine 都要判两种键格式。
+        """
+        if limit <= 0 or len(self.pain_logs) <= limit:
+            return
+        for key in sorted(self.pain_logs)[: len(self.pain_logs) - limit]:
+            self.pain_logs.pop(key, None)
 
     def as_dict(self) -> dict[str, Any]:
         return {

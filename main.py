@@ -155,7 +155,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.9.0"
+    version = "1.9.1"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)

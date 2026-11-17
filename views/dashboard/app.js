@@ -3,11 +3,11 @@
    页面数据都是不可信内容，所有插值一律 esc()。 */
 
 const PHASES = {
-  menstrual: { name: "月经期", color: "#cf4f88", soft: "#fbe4ee" },
-  follicular: { name: "卵泡期", color: "#3f9e6f", soft: "#dff2e8" },
-  ovulation: { name: "排卵期", color: "#c08f14", soft: "#fbf0d4" },
-  luteal: { name: "黄体期", color: "#6f6bc4", soft: "#e6e5fa" },
-  pms: { name: "经前期", color: "#d2643c", soft: "#fbe6dc" },
+  menstrual: { name: "月经期", color: "#a8434f", soft: "rgba(157,59,78,0.11)" },
+  follicular: { name: "卵泡期", color: "#b56b74", soft: "rgba(157,59,78,0.09)" },
+  ovulation: { name: "排卵期", color: "#c48f95", soft: "rgba(157,59,78,0.07)" },
+  luteal: { name: "黄体期", color: "#8f5a64", soft: "rgba(157,59,78,0.08)" },
+  pms: { name: "经前期", color: "#9c3543", soft: "rgba(157,59,78,0.10)" },
 };
 
 const VECTOR_LABELS = {
@@ -36,6 +36,7 @@ const el = {
 };
 
 const app = {
+  tab: "overview",
   bridge: null,
   overview: null,
   key: null,
@@ -295,9 +296,11 @@ function renderStats(data) {
   if (perf.count) {
     const mid = perf.p50 === null || perf.p50 === undefined ? "—" : `${perf.p50} ms`;
     const tail = perf.p95 === null || perf.p95 === undefined ? "—" : `${perf.p95} ms`;
-    el.stats.innerHTML += `<div class="stat wide"><div class="k">插件自己花的时间（注入 ${
+    el.stats.innerHTML += `<div class="stat wide"><div class="k">插件耗时 · 注入 ${
       perf.count
-    } 次）</div><div class="v">中位 ${esc(mid)} · 90% 在 ${esc(tail)} 以内</div></div>`;
+    } 次</div><div class="v">中位 ${esc(mid)}</div><div class="sub">90% 在 ${esc(
+      tail,
+    )} 以内</div></div>`;
   }
 }
 
@@ -412,6 +415,35 @@ function bar(name, label, value, cls) {
   </div>`;
 }
 
+/* 顶部身份卡常驻，其余内容按标签页分组 */
+function detailShell(hero, panels) {
+  const tabs = [
+    ["overview", "概览"],
+    ["state", "她的状态"],
+    ["records", "记录"],
+    ["settings", "设置"],
+    ["injection", "注入"],
+  ];
+  const active = tabs.some(([key]) => key === app.tab) ? app.tab : "overview";
+  const tabBar = tabs
+    .map(
+      ([key, label]) =>
+        `<button class="tab${key === active ? " on" : ""}" type="button" role="tab" data-tab="${key}" aria-selected="${
+          key === active ? "true" : "false"
+        }">${esc(label)}</button>`,
+    )
+    .join("");
+  const body = tabs
+    .map(
+      ([key]) =>
+        `<div class="tab-panel" data-panel="${key}"${key === active ? "" : " hidden"}>${
+          panels[key] || ""
+        }</div>`,
+    )
+    .join("");
+  return `${hero}<nav class="tabs" role="tablist">${tabBar}</nav><div class="tab-panels">${body}</div>`;
+}
+
 function renderDetail(data) {
   app.detail = data;
   const user = data.user || {};
@@ -423,9 +455,18 @@ function renderDetail(data) {
 
   document.documentElement.style.setProperty("--phase", phase.color);
   document.documentElement.style.setProperty("--phase-soft", phase.soft);
+  document.documentElement.dataset.phase = (state && state.phase) || "none";
+
+  const panelsOf = (overview) => ({
+    overview,
+    state: stateBlock(data),
+    records: recordsBlock(data),
+    settings: `${formBlock(settings, user, data)}${voiceBlock(voice)}`,
+    injection: injectionBlock(data),
+  });
 
   if (!state) {
-    el.detail.innerHTML = `
+    const hero = `
       <div class="hero">
         <div class="hero-id">
           <span class="hero-emoji">🩸</span>
@@ -440,16 +481,12 @@ function renderDetail(data) {
         </div>
       </div>
       <div class="notices">
-        <div class="notice info"><span class="ico">·</span><span>这个档案还没有周期记录，先用下面的按钮记第一天。</span></div>
-      </div>
-      ${stateBlock(data)}
-      ${trendBlock(data)}
-      ${calendarBlock(data)}
-      ${injectionBlock(data)}
-      ${recordsBlock(data)}
-      ${formBlock(settings, user)}
-      ${voiceBlock(voice)}
-    `;
+        <div class="notice info"><span class="ico">·</span><span>这个档案还没有周期记录，先用「记录」里的按钮记第一天。</span></div>
+      </div>`;
+    el.detail.innerHTML = detailShell(
+      hero,
+      panelsOf(`${trendBlock(data)}${calendarBlock(data)}`),
+    );
     return;
   }
 
@@ -492,9 +529,9 @@ function renderDetail(data) {
 
   const predictions = (data.predictions || [])
     .map((item) => `${esc(item.start)} — ${esc(item.end)}`)
-    .join("　·　");
+    .join("<br>");
 
-  el.detail.innerHTML = `
+  const hero = `
     <div class="hero">
       <div class="hero-id">
         <span class="hero-emoji">${esc(state.emoji || "🩸")}</span>
@@ -518,8 +555,9 @@ function renderDetail(data) {
           state.days_to_next <= 0 ? "就是预计那天" : "距下次预计（天）"
         }</div>
       </div>
-    </div>
+    </div>`;
 
+  const overview = `
     <div class="track-wrap">
       <div class="track"><i style="width:${pct(state.progress)}"></i></div>
       <div class="track-marks">
@@ -560,7 +598,7 @@ function renderDetail(data) {
           <li>经期长度 ${esc(stats.period_length ?? "—")} 天${
             stats.from_history ? "" : "（设置值）"
           }</li>
-          <li>最近三次：${predictions || "—"}</li>
+          <li>最近三次：<br>${predictions || "—"}</li>
           <li>提醒口吻：${
             settings.reminder_style === "in_character" ? "用她的口吻" : "系统提醒"
           }</li>
@@ -568,15 +606,12 @@ function renderDetail(data) {
       </div>
     </div>
 
-    ${stateBlock(data)}
     ${trendBlock(data)}
-      ${calendarBlock(data)}
-    ${injectionBlock(data)}
-    ${recordsBlock(data)}
-    ${formBlock(settings, user)}
-    ${voiceBlock(voice)}
-  `;
+    ${calendarBlock(data)}`;
+
+  el.detail.innerHTML = detailShell(hero, panelsOf(overview));
 }
+
 
 /* 编辑行：补录时 item 为空 */
 function recordEditor(item) {
@@ -727,7 +762,7 @@ function stateBlock(data) {
         }</span>
       </div>
       <div class="state-grid">
-        ${(data.overrides && data.overrides.fields ? data.overrides.fields : [])
+        ${((data.overrides && data.overrides.fields) || Object.keys(VECTOR_LABELS))
           .map((key) => {
             const pinned = overrides && overrides[key] !== undefined;
             const value = pinned ? overrides[key] : vector[key];
@@ -750,7 +785,7 @@ function stateBlock(data) {
   </div>`;
 }
 
-function formBlock(settings, user) {
+function formBlock(settings, user, data) {
   const style = settings.reminder_style === "reminder" ? "reminder" : "in_character";
   return `<div class="table-wrap">
     <div class="table-head"><h3>设置</h3></div>
@@ -772,7 +807,7 @@ function formBlock(settings, user) {
         </div>
         <div class="field">
           <label for="f-cycle">周期长度（天）</label>
-          <input id="f-cycle" type="number" min="15" max="60" step="1" value="${esc(
+          <input id="f-cycle" type="number" min="15" max="90" step="1" value="${esc(
             settings.cycle_length,
           )}" />
           <span class="hint">记录够 3 次后会自动按历史算</span>
@@ -782,6 +817,24 @@ function formBlock(settings, user) {
           <input id="f-period" type="number" min="1" max="12" step="1" value="${esc(
             settings.period_length,
           )}" />
+        </div>
+        <div class="field">
+          <label for="f-constitution">体质</label>
+          <select id="f-constitution">
+            ${((data && data.constitution_options) || [])
+              .map(
+                (item) =>
+                  `<option value="${esc(item.key)}"${
+                    item.key === settings.constitution ? " selected" : ""
+                  }>${esc(item.label)}</option>`,
+              )
+              .join("")}
+          </select>
+          <span class="hint">${esc(
+            ((data && data.constitution_options) || []).find(
+              (item) => item.key === settings.constitution,
+            )?.hint || "换个底子：疼痛、情绪、精力的整体基准",
+          )}</span>
         </div>
         <div class="field">
           <label for="f-pain">疼痛敏感度</label>
@@ -802,6 +855,21 @@ function formBlock(settings, user) {
             settings.pms_strength,
           )}" />
           <span class="hint">1.0 是标准，0 等于没有经前期</span>
+        </div>
+        <div class="field">
+          <label for="f-learn">跟着她自报的疼痛学</label>
+          <select id="f-learn">
+            <option value="1" ${settings.phase_learning ? "selected" : ""}>开</option>
+            <option value="0" ${settings.phase_learning ? "" : "selected"}>关</option>
+          </select>
+          <span class="hint">每个阶段攒够 3 次自报值才生效</span>
+        </div>
+        <div class="field">
+          <label for="f-weight">学习权重</label>
+          <input id="f-weight" type="number" min="0" max="0.8" step="0.05" value="${esc(
+            settings.phase_weight,
+          )}" />
+          <span class="hint">0 只按曲线推算，0.3 是默认</span>
         </div>
         <div class="field">
           <label for="f-voice">提醒口吻</label>
@@ -950,7 +1018,7 @@ function injectionBlock(data) {
   return `<div class="table-wrap">
     <div class="table-head">
       <h3>她要看到的那段话</h3>
-      <span class="dim">每次回复前拼进系统提示词的原文</span>
+      <span class="dim">每次回复前挂到临时内容上的原文（不动系统提示词）</span>
     </div>
     <pre class="injection">${esc(text)}</pre>
   </div>`;
@@ -1002,6 +1070,12 @@ function readForm() {
   if (remind) payload.reminder = Boolean(remind.checked);
   const style = grab("f-voice");
   if (style) payload.reminder_style = style.value;
+  const constitution = grab("f-constitution");
+  if (constitution && constitution.value) payload.constitution = constitution.value;
+  const learn = grab("f-learn");
+  if (learn) payload.phase_learning = learn.value === "1";
+  const weight = num("f-weight");
+  if (weight !== undefined) payload.phase_weight = weight;
   const pause = grab("f-pause");
   if (pause) payload.paused_until = pause.value || "";
   return payload;
@@ -1432,6 +1506,19 @@ function bindEvents() {
   }
 
   el.detail.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-tab]");
+    if (tab) {
+      app.tab = tab.dataset.tab || "overview";
+      el.detail.querySelectorAll(".tab").forEach((node) => {
+        const on = node.dataset.tab === app.tab;
+        node.classList.toggle("on", on);
+        node.setAttribute("aria-selected", on ? "true" : "false");
+      });
+      el.detail.querySelectorAll(".tab-panel").forEach((node) => {
+        node.hidden = node.dataset.panel !== app.tab;
+      });
+      return;
+    }
     const button = event.target.closest("[data-act]");
     if (!button) return;
     act(button.dataset.act, button);
@@ -1459,6 +1546,8 @@ async function boot() {
     /* 上下文拿不到也能用 */
   }
   bindEvents();
+  const wanted = new URLSearchParams(location.search).get("tab");
+  if (wanted) app.tab = wanted.trim() || app.tab;
   el.subtitle.textContent = "正在读取…";
   await refresh();
 }

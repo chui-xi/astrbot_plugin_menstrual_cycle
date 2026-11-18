@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from urllib.parse import unquote
 from typing import Any
 
+from . import clock
 from . import comfort as cm
 from . import text as tt
 from .engine import (
@@ -108,7 +109,9 @@ def _vector_dict(state: PhaseState) -> dict[str, Any]:
     }
 
 
-def state_payload(state: PhaseState | None) -> dict[str, Any] | None:
+def state_payload(
+    state: PhaseState | None, now: datetime | None = None
+) -> dict[str, Any] | None:
     """PhaseState -> 前端直接可用的小字典。"""
     if state is None:
         return None
@@ -139,7 +142,7 @@ def state_payload(state: PhaseState | None) -> dict[str, Any] | None:
             {
                 "kind": item.kind,
                 "label": item.label,
-                "minutes": item.remaining_minutes(),
+                "minutes": item.remaining_minutes(now),
                 "at": _stamp(item.at),
             }
             for item in state.comforts
@@ -320,6 +323,7 @@ class DashboardAPI:
             payload["user_key"] = key
             profile = UserProfile.from_dict(payload)
             profile.trim_pain_logs()
+            backup = await self._store().backup(key)
             profile.updated_at = _now_stamp()
             await self._store().upsert(profile)
             with contextlib.suppress(Exception):
@@ -332,6 +336,7 @@ class DashboardAPI:
                     "message": (
                         f"已导入 {len(profile.periods)} 条记录、"
                         f"{len(profile.pain_logs)} 天疼痛记录"
+                        + (f"（旧档案已备份到 backups/{backup.split('/')[-1]}）" if backup else "")
                     ),
                     "detail": await self._detail_payload(profile),
                 }
@@ -385,10 +390,10 @@ class DashboardAPI:
             if self.plugin._scope() == "character":
                 await self.plugin.ensure_character_profile()
             profiles = await self._profiles()
-            today = date.today()
+            today = clock.today()
             users: list[dict[str, Any]] = []
             for profile in profiles:
-                state = compute_state(profile, today)
+                state = compute_state(profile, clock.today(profile))
                 latest = profile.latest()
                 item: dict[str, Any] = {
                     "user_key": profile.user_key,
@@ -402,7 +407,7 @@ class DashboardAPI:
                     "present": state is not None,
                 }
                 if state is not None:
-                    payload = state_payload(state) or {}
+                    payload = state_payload(state, clock.now(profile)) or {}
                     item.update(
                         {
                             "cycle_day": payload["cycle_day"],
@@ -506,7 +511,7 @@ class DashboardAPI:
                 return self._fail("这个档案已经在了，直接点左边的名字就行")
 
             start = parse_date(body.get("start"))
-            today = date.today()
+            today = clock.today()
             if start is not None and start > today:
                 return self._fail("开始日不能是未来")
 
@@ -552,7 +557,7 @@ class DashboardAPI:
             if profile is None:
                 return self._fail("没有这个用户", status_code=404)
             payload = await self._detail_payload(profile)
-            return self._ok({"ok": True, "today": _iso(date.today()), **payload})
+            return self._ok({"ok": True, "today": _iso(clock.today(profile)), **payload})
         except Exception as exc:
             self._log().exception("[menstrual] user_detail 出错")
             return self._fail(f"读取失败：{exc}", status_code=500)
@@ -567,7 +572,7 @@ class DashboardAPI:
             profile = await self._profile(user_key)
             if profile is None:
                 return self._fail("没有这个用户", status_code=404)
-            today = date.today()
+            today = clock.today(profile)
 
             if action in ("start", "begin", "log_start"):
                 day = parse_date(body.get("date")) or today
@@ -690,8 +695,8 @@ class DashboardAPI:
             profile = await self._profile(user_key)
             if profile is None:
                 return self._fail("没有这个用户", status_code=404)
-            today = date.today()
-            moment = datetime.now()
+            today = clock.today(profile)
+            moment = clock.now(profile)
             changes: list[str] = []
 
             if "pain" in body:
@@ -1022,7 +1027,7 @@ class DashboardAPI:
     # ------------------------------------------------------------------
     def _set_latest_start(self, profile: UserProfile, day: date) -> str:
         """把最近一次经期的开始日挪到 day；还没有记录就补一条。返回错误文案或空串。"""
-        today = date.today()
+        today = clock.today(profile)
         if day > today:
             return "开始日不能是未来"
         periods = sorted(profile.periods, key=lambda r: r.start)
@@ -1096,7 +1101,7 @@ class DashboardAPI:
 
     async def _detail_payload(self, profile: UserProfile) -> dict[str, Any]:
         """写完立刻回一份最新的详情，省一次往返。"""
-        today = date.today()
+        today = clock.today(profile)
         state = compute_state(profile, today)
         return {
             "user": {
@@ -1108,7 +1113,7 @@ class DashboardAPI:
                 "paused": profile.paused(today),
                 "updated_at": profile.updated_at or "",
             },
-            "state": state_payload(state),
+            "state": state_payload(state, clock.now(profile)),
             "settings": settings_payload(profile),
             "records": [
                 record_payload(item)

@@ -14,6 +14,8 @@ import random
 import statistics
 from datetime import date, datetime, timedelta
 
+from . import clock
+
 from .models import (
     CONSTITUTIONS,
     PHASE_SPECS,
@@ -130,7 +132,7 @@ def active_comforts(
     profile: UserProfile, now: datetime | None = None
 ) -> list[Comfort]:
     """还在生效的「被哄」记录。"""
-    moment = now or datetime.now()
+    moment = now or clock.now(profile)
     return [item for item in profile.comforts if item.active(moment)]
 
 
@@ -363,8 +365,8 @@ def compute_state(
     ``ignore_overrides`` 用来回看历史：管理员手动钉住的是「从现在起几小时」，
     不该把过去几天也一起改掉。
     """
-    today = today or date.today()
-    moment = now or datetime.combine(today, datetime.now().time())
+    today = today or clock.today(profile)
+    moment = now or datetime.combine(today, clock.now(profile).time())
     periods = profile.sorted_periods()
     if not periods:
         return None
@@ -452,7 +454,7 @@ def recent_states(
     """
     if days <= 0:
         return []
-    base = today or date.today()
+    base = today or clock.today(profile)
     out: list[tuple[date, PhaseState]] = []
     for offset in range(1, days + 1):
         day = base - timedelta(days=offset)

@@ -32,6 +32,7 @@ try:  # 4.x
 except Exception:  # pragma: no cover - 老版本没有该实体
     ProviderRequest = Any  # type: ignore[assignment,misc]
 
+from .core import clock
 from .core import comfort as cm
 from .core import text as tt
 from .core.engine import compute_state, cycle_stats, predict_next_periods
@@ -155,7 +156,7 @@ SETTING_FIELDS: dict[str, tuple[str, str, float, float, str]] = {
 
 
 class MenstrualCyclePlugin(Star):
-    version = "1.8.0"
+    version = "1.8.1"
 
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
@@ -241,6 +242,7 @@ class MenstrualCyclePlugin(Star):
     async def initialize(self) -> None:
         await self.store.load()
         self._load_sent()
+        self._load_tz()
         if self._cfg("enable_reminder", True):
             self._reminder_task = asyncio.create_task(
                 self._reminder_loop(), name="menstrual-reminder"
@@ -486,7 +488,7 @@ class MenstrualCyclePlugin(Star):
             return "这个用户还没有任何周期记录，先让他用「经期 开始」记一次。"
 
         if act in ("log_start", "start", "log"):
-            day = parse_date(value) if value else date.today()
+            day = parse_date(value) if value else self._today(profile)
             if day is None:
                 return f"日期「{value}」无法解析。"
             if not await self._record_start(profile, day):
@@ -495,7 +497,7 @@ class MenstrualCyclePlugin(Star):
             return state.summary_line() if state else "已记录。"
 
         if act in ("log_end", "end"):
-            day = parse_date(value) if value else date.today()
+            day = parse_date(value) if value else self._today(profile)
             if day is None:
                 return f"日期「{value}」无法解析。"
             ok, message = await self._record_end(profile, day, "")
@@ -509,7 +511,7 @@ class MenstrualCyclePlugin(Star):
                 return "log_pain 需要一个 0-10 的数字。"
             if not 0 <= level <= 10:
                 return "疼痛程度要落在 0-10 之间。"
-            profile.pain_logs[date.today().isoformat()] = clamp(level / 10.0)
+            profile.pain_logs[self._today(profile).isoformat()] = clamp(level / 10.0)
             profile.trim_pain_logs()
             await self.store.upsert(profile)
             state = compute_state(profile)
@@ -603,7 +605,7 @@ class MenstrualCyclePlugin(Star):
     async def _handle(
         self, action: str, args: list[str], event: AstrMessageEvent
     ) -> AsyncGenerator[Any, None]:
-        today = date.today()
+        today = self._today()
 
         if action == "帮助":
             yield event.plain_result(tt.render_help())
@@ -956,7 +958,7 @@ class MenstrualCyclePlugin(Star):
             return False, (
                 f"结束日不能早于开始日（{tt.pretty_date(record.start)}）。"
             )
-        if day > date.today():
+        if day > self._today(profile):
             return False, "结束日不能是未来。"
         record.end = day
         if note:
@@ -1072,10 +1074,10 @@ class MenstrualCyclePlugin(Star):
             return
         if self._in_quiet_window():
             return
-        today_key = date.today().isoformat()
         for profile in await self.store.all_profiles():
             if not profile.settings.reminder or not profile.last_umo:
                 continue
+            today_key = self._today(profile).isoformat()
             if self._sent.get(profile.user_key) == today_key:
                 continue
             state = compute_state(profile)
@@ -1140,7 +1142,7 @@ class MenstrualCyclePlugin(Star):
     def _in_quiet_window(self) -> bool:
         start = int(self._cfg("reminder_hour_from", 9))
         end = int(self._cfg("reminder_hour_to", 23))
-        hour = datetime.now().hour
+        hour = self._now().hour
         if start <= end:
             return not (start <= hour < end)
         return end <= hour < start
@@ -1271,7 +1273,7 @@ class MenstrualCyclePlugin(Star):
             offset = wanted - 1
         else:
             offset = random.randint(0, length - 1)
-        start = date.today() - timedelta(days=offset)
+        start = self._today(profile) - timedelta(days=offset)
         profile.periods.append(
             PeriodRecord(
                 id=f"p{uuid.uuid4().hex[:8]}",
@@ -1360,6 +1362,23 @@ class MenstrualCyclePlugin(Star):
         if tokens and tokens[0].lower() in COMMAND_WORDS:
             tokens = tokens[1:]
         return tokens
+
+    def _load_tz(self) -> None:
+        """记下 AstrBot 配的时区，取不到就交给 core.clock 回退系统本地。"""
+        name = ""
+        with contextlib.suppress(Exception):
+            cfg = self.context.get_config()
+            raw = cfg.get("timezone") if hasattr(cfg, "get") else None
+            name = str(raw or "")
+        self.__dict__["_tz_name"] = name.strip()
+
+    def _today(self, profile: Any = None) -> date:
+        """这个档案眼里的「今天」；没有档案时用实例时区。"""
+        return clock.today(profile, fallback=self.__dict__.get("_tz_name", ""))
+
+    def _now(self, profile: Any = None) -> datetime:
+        """这个档案眼里的「现在」（naive，和项目里其它比较保持一致）。"""
+        return clock.now(profile, fallback=self.__dict__.get("_tz_name", ""))
 
     def _cfg(self, key: str, default: Any = None) -> Any:
         try:

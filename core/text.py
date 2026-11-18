@@ -8,6 +8,7 @@ from __future__ import annotations
 import random
 from datetime import date
 
+from . import clock
 from . import comfort as comfort_mod
 from .engine import (
     compute_state,
@@ -145,7 +146,7 @@ def render_forecast(profile: UserProfile, count: int = 3) -> str:
         end_text = f"{pretty_date(end)}前后" if soft else pretty_date(end)
         lines.append(
             f"{index}. {begin_text} — {end_text}（{days} 天，"
-            f"{human_delta((begin - date.today()).days)}）"
+            f"{human_delta((begin - clock.today(profile)).days)}）"
         )
     lines.append("")
     if stats["median_cycle"]:
@@ -371,7 +372,7 @@ def build_injection(
     ``normal`` 给数值与三条规则，``full`` 是完整版（历史 + 三条倾向 + 全部规则）。
     """
     level = detail if detail in ("brief", "normal", "full") else "full"
-    moment = today or date.today()
+    moment = today or clock.today(profile)
     vec = state.vector
     who = profile.nickname or "对方"
     written = _voice_phase(voice, state.phase.key)
@@ -555,7 +556,7 @@ def render_settings(profile: UserProfile) -> str:
         f"主动提醒：{'开' if s.reminder else '关'}（{style}）",
     ]
     until = parse_date(s.paused_until)
-    if until and until >= date.today():
+    if until and until >= clock.today(profile):
         lines.append(f"观察期：到 {pretty_date(until)}，这段时间不做周期推算")
     return "\n".join(lines)
 

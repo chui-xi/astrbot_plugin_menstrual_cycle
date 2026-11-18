@@ -7,8 +7,10 @@ AstrBot 的插件卸载/更新会覆盖插件目录，所以数据必须放在 d
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +67,39 @@ class CycleStore:
             profile.updated_at = datetime.now().isoformat(timespec="seconds")
             self._cache[profile.user_key] = profile
             await asyncio.to_thread(self._write_sync, self._cache)
+
+    async def backup(self, user_key: str) -> str | None:
+        """把当前档案另存一份。
+
+        导入、覆盖这类不可逆的写操作之前调用。没有这个档案时返回 None。
+        备份放在 ``<数据目录>/backups/``，只留最近 20 份。
+        """
+        data = await self.load()
+        profile = data.get(user_key)
+        if profile is None:
+            return None
+        return await asyncio.to_thread(self._backup_sync, user_key, profile)
+
+    def _backup_sync(self, user_key: str, profile: UserProfile) -> str:
+        folder = self.path.parent / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", user_key)[:60].strip("_") or "user"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = folder / f"{safe}-{stamp}.json"
+        payload: dict[str, Any] = {
+            "version": STORE_VERSION,
+            "user_key": user_key,
+            "backed_up_at": datetime.now().isoformat(timespec="seconds"),
+            "profile": profile.as_dict(),
+        }
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        files = sorted(folder.glob("*.json"), key=lambda item: item.stat().st_mtime)
+        for old in files[:-20]:
+            with contextlib.suppress(OSError):
+                old.unlink()
+        return str(target.relative_to(self.path.parent))
 
     async def delete(self, user_key: str) -> bool:
         async with self._lock:

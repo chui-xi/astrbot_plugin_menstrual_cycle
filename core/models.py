@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from . import clock
+
 ISO_FMT = "%Y-%m-%d"
 DT_FMT = "%Y-%m-%dT%H:%M:%S"
 PAIN_LOG_LIMIT = 1200
@@ -366,14 +368,14 @@ class UserProfile:
         until = parse_date(self.settings.paused_until)
         if until is None:
             return False
-        return until >= (today or date.today())
+        return until >= (today or clock.today(self))
 
     def active_overrides(self, now: datetime | None = None) -> dict[str, float]:
         """管理员手动钉住的数值，过期就当作没有。"""
         if not self.overrides:
             return {}
         until = parse_datetime(self.override_until)
-        if until is not None and until <= (now or datetime.now()):
+        if until is not None and until <= (now or clock.now(self)):
             return {}
         return dict(self.overrides)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from . import clock
 from .models import DT_FMT, Comfort
 
 
@@ -122,7 +123,7 @@ def register(
     if hit is None:
         return None
     rule, word = hit
-    moment = now or datetime.now()
+    moment = now or clock.now(profile)
     for item in reversed(profile.comforts[-limit:]):
         if item.kind != rule.kind:
             continue
